@@ -61,7 +61,7 @@ extern "C" {
 typedef struct SEO_InitParams {
   uint32_t structSize;      // sizeof(SEO_InitParams)
   const wchar_t* baseDir;   // folder with StreamEmber.Overlay.dll, libcef.dll and the host exe (no trailing slash)
-  const char* startUrl;     // UTF-8; NULL or "" = file:///<baseDir>/ui/index.html
+  const char* startUrl;     // UTF-8; NULL/"" = <baseDir>/ui/index.html, no scheme = path under ui/, else full URL
   int32_t width;            // initial view size in pixels
   int32_t height;
   int32_t frameRate;        // 1..60, 0 = 60

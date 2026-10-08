@@ -11,7 +11,8 @@
     3. dist\ klasörü oyun klasörü düzeninde hazırlanır:
          dist\StreamEmber.Overlay.GTAV.asi
          dist\StreamEmber\Overlay\   (çekirdek DLL, host exe, CEF dosyaları, ui\, overlay.ini)
-         dist\scripts\               (StreamEmber.Overlay.Bridge.dll, OverlayDemo.3.cs)
+         dist\scripts\               (StreamEmber.Overlay.Bridge.dll, StreamEmber.TrainerDemo.dll)
+       ui\mhud\ altına ../MHud kiti ve FiveM sayfası kopyalanır; trainer.html bu sayfaya trainer.js eklenerek üretilir.
     4. -Deploy verilirse dist\ oyun klasörüne kopyalanır (mevcut overlay.ini korunur).
 
     Ön koşullar: Visual Studio 2022+ ("Desktop development with C++"), CMake 3.21+ (VS ile gelen de olur),
@@ -26,7 +27,9 @@
 .PARAMETER UpdateCef
     cef.lock'u yok sayar, desteklenen aralıktaki en yeni stable CEF'e geçer.
 .PARAMETER SkipBridge
-    C# köprüsünü derlemez.
+    C# köprüsünü ve trainer demosunu derlemez.
+.PARAMETER ResetConfig
+    Kurulumda oyundaki overlay.ini'yi şablonla değiştirir (varsayılan: korunur).
 
 .EXAMPLE
     .\build.ps1
@@ -42,7 +45,8 @@ param(
     [switch]$Deploy,
     [string]$GamePath,
     [switch]$UpdateCef,
-    [switch]$SkipBridge
+    [switch]$SkipBridge,
+    [switch]$ResetConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +60,7 @@ $CefMarker = Join-Path $CefDir '.streamember-cef-version'
 $LockFile = Join-Path $Root 'cef.lock'
 $BuildDir = Join-Path $Root 'build'
 $DistDir = Join-Path $Root 'dist'
+$MHudDir = Join-Path (Split-Path $Root -Parent) 'MHud'
 $CefIndexUrl = 'https://cef-builds.spotifycdn.com/index.json'
 $CefCdn = 'https://cef-builds.spotifycdn.com/'
 # Kodun derlenerek kontrol edildiği CEF ana sürüm aralığı (Chromium ana sürümüyle aynı)
@@ -185,20 +190,46 @@ function Build-Native {
     Write-Ok 'C++ projeleri derlendi.'
 }
 
-function Build-Bridge {
-    Write-Title '3/4  C# köprüsü'
+function Build-Managed {
+    Write-Title '3/4  C# köprüsü + trainer demosu'
     if ($SkipBridge) { Write-Warn 'Atlandı (-SkipBridge).'; return $null }
     $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
-    if (-not $dotnet) { Write-Warn '.NET SDK yok; köprü atlandı.'; return $null }
-    $project = Join-Path $Root 'bridge\StreamEmber.Overlay.Bridge\StreamEmber.Overlay.Bridge.csproj'
-    $out = Join-Path $BuildDir 'bridge'
+    if (-not $dotnet) { Write-Warn '.NET SDK yok; C# projeleri atlandı.'; return $null }
+    $out = Join-Path $BuildDir 'managed'
+    # Trainer demo references the bridge project, so one build produces both DLLs
+    $project = Join-Path $Root 'samples\gtav\TrainerDemo\StreamEmber.TrainerDemo.csproj'
     & $dotnet.Source build $project -c $Configuration -o $out --nologo -v minimal | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "Köprü derlenemedi ($LASTEXITCODE)." }
-    Write-Ok 'StreamEmber.Overlay.Bridge.dll derlendi.'
-    return (Join-Path $out 'StreamEmber.Overlay.Bridge.dll')
+    if ($LASTEXITCODE -ne 0) { throw "C# projeleri derlenemedi ($LASTEXITCODE). SHVDN başvurusu: ..\GTAVScriptHook\lib\ScriptHookVDotNet3.dll" }
+    Write-Ok 'StreamEmber.Overlay.Bridge.dll + StreamEmber.TrainerDemo.dll derlendi.'
+    return $out
 }
 
-function New-Dist([string]$BridgeDll) {
+# MHud's FiveM page (integration/mhud/html) + kit, unchanged; trainer.html = that page + trainer.css/trainer.js
+function Copy-MHudUi([string]$UiDir) {
+    $kit = Join-Path $MHudDir 'kit'
+    $page = Join-Path $MHudDir 'integration\mhud\html'
+    if (-not (Test-Path (Join-Path $page 'index.html')) -or -not (Test-Path $kit)) {
+        Write-Warn "MHud bulunamadı ($MHudDir); trainer arayüzü atlandı."
+        return
+    }
+    $target = Join-Path $UiDir 'mhud'
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    Copy-Item $kit $target -Recurse -Force
+    foreach ($f in 'index.html', 'app.js', 'app.css') { Copy-Item (Join-Path $page $f) $target -Force }
+
+    $html = [IO.File]::ReadAllText((Join-Path $page 'index.html'), [Text.Encoding]::UTF8)
+    $headAnchor = '</head>'
+    $appAnchor = '<script src="app.js"></script>'
+    if (-not $html.Contains($headAnchor) -or -not $html.Contains($appAnchor)) {
+        throw "MHud index.html beklenen yapıda değil ('$headAnchor' / '$appAnchor' yok); trainer.html üretilemedi."
+    }
+    $html = $html.Replace($headAnchor, "<link rel=`"stylesheet`" href=`"../trainer/trainer.css`">`n$headAnchor")
+    $html = $html.Replace($appAnchor, "<script src=`"../trainer/trainer.js`"></script>`n$appAnchor")
+    [IO.File]::WriteAllText((Join-Path $target 'trainer.html'), $html, (New-Object Text.UTF8Encoding($false)))
+    Write-Ok 'MHud arayüzü + trainer.html hazır.'
+}
+
+function New-Dist([string]$ManagedDir) {
     Write-Title '4/4  dist\'
     if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
     $overlayDir = Join-Path $DistDir 'StreamEmber\Overlay'
@@ -216,10 +247,16 @@ function New-Dist([string]$BridgeDll) {
     Copy-Item (Join-Path $CefDir 'Resources\*') $overlayDir -Recurse -Force
 
     Copy-Item (Join-Path $Root 'ui') $overlayDir -Recurse
+    Copy-MHudUi (Join-Path $overlayDir 'ui')
     Copy-Item (Join-Path $Root 'overlay.ini') $overlayDir
 
-    if ($BridgeDll -and (Test-Path $BridgeDll)) { Copy-Item $BridgeDll $scriptsDir }
-    Copy-Item (Join-Path $Root 'samples\gtav\OverlayDemo.3.cs') $scriptsDir
+    # Only one script may consume UI messages, so the old OverlayDemo.3.cs sample is not deployed with the trainer.
+    if ($ManagedDir -and (Test-Path $ManagedDir)) {
+        foreach ($f in 'StreamEmber.Overlay.Bridge.dll', 'StreamEmber.TrainerDemo.dll', 'StreamEmber.TrainerDemo.pdb') {
+            $p = Join-Path $ManagedDir $f
+            if (Test-Path $p) { Copy-Item $p $scriptsDir }
+        }
+    }
 
     $size = (Get-ChildItem $DistDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
     Write-Ok ("dist\ hazır ({0:N0} MB)" -f $size)
@@ -243,14 +280,19 @@ function Install-ToGame {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $source = Join-Path $DistDir 'StreamEmber\Overlay'
     Get-ChildItem $source | ForEach-Object {
-        if ($_.Name -eq 'overlay.ini' -and (Test-Path (Join-Path $target 'overlay.ini'))) {
-            Write-Warn 'overlay.ini zaten var; korunuyor.'
+        if ($_.Name -eq 'overlay.ini' -and (Test-Path (Join-Path $target 'overlay.ini')) -and -not $ResetConfig) {
+            Write-Warn 'overlay.ini zaten var; korunuyor (şablonu yazmak için -ResetConfig). Trainer için: StartUrl=mhud/trainer.html'
         } else {
             Copy-Item $_.FullName $target -Recurse -Force
         }
     }
     $scripts = Join-Path $game 'scripts'
     New-Item -ItemType Directory -Force -Path $scripts | Out-Null
+    $oldDemo = Join-Path $scripts 'OverlayDemo.3.cs'
+    if (Test-Path $oldDemo) {
+        Move-Item $oldDemo "$oldDemo.disabled" -Force
+        Write-Warn 'scripts\OverlayDemo.3.cs devre dışı bırakıldı (.disabled): trainer ile aynı mesaj kuyruğunu okuyordu.'
+    }
     Copy-Item (Join-Path $DistDir 'scripts\*') $scripts -Force
     Write-Ok "Kuruldu: $game"
     Write-Host '  Loglar: StreamEmber\Overlay\logs\ (gtav-backend.log, overlay.log, cef.log)'
@@ -258,8 +300,8 @@ function Install-ToGame {
 
 $lock = Install-Cef
 Build-Native
-$bridge = Build-Bridge
-New-Dist $bridge
+$managed = Build-Managed
+New-Dist $managed
 if ($Deploy) { Install-ToGame }
 Write-Host ''
 Write-Ok "Bitti. CEF $($lock.version), $Configuration."

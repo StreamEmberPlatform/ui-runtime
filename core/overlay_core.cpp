@@ -353,9 +353,10 @@ void CreateBrowserOnUiThread() {
   browserSettings.windowless_frame_rate = S().frameRate;
   browserSettings.background_color = CefColorSetARGB(0, 0, 0, 0);  // transparent page background
 
+  // Empty = ui/index.html; no scheme = path relative to ui/ (e.g. "mhud/trainer.html"); otherwise a full URL
   std::string url = S().startUrl;
-  if (url.empty()) {
-    std::wstring path = S().baseDir + L"\\ui\\index.html";
+  if (url.empty() || url.find("://") == std::string::npos) {
+    std::wstring path = S().baseDir + L"\\ui\\" + (url.empty() ? std::wstring(L"index.html") : FromUtf8(url));
     std::replace(path.begin(), path.end(), L'\\', L'/');
     url = "file:///" + ToUtf8(path);
   }

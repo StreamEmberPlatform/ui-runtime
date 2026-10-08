@@ -38,7 +38,9 @@ host/                       StreamEmber.Overlay.Host.exe — CEF alt süreci, JS
 backends/gtav-d3d11/        StreamEmber.Overlay.GTAV.asi — Present callback, D3D11 çizim, WndProc
 bridge/                     StreamEmber.Overlay.Bridge (net48) — scriptler için C# sarmalayıcı
 ui/index.html               test sayfası (aşama 2-3)
-samples/gtav/OverlayDemo.3.cs  SHVDN test scripti (aşama 3)
+samples/gtav/OverlayDemo.3.cs  ilk köprü test scripti (aşama 3, artık kurulmuyor)
+samples/gtav/TrainerDemo/     MHud trainer + performans testi (StreamEmber.TrainerDemo.dll)
+ui/trainer/                 MHud sayfası için adaptör + performans paneli
 overlay.ini                 oyundaki ayar dosyasının şablonu
 build.ps1                   CEF indir + derle + dist\ + (-Deploy) oyuna kur
 cef.lock                    sabitlenmiş CEF sürümü (ilk derlemede oluşur, commit edilir)
@@ -51,19 +53,21 @@ Oyun klasöründeki düzen:
 GTA V\StreamEmber.Overlay.GTAV.asi
 GTA V\StreamEmber\Overlay\   StreamEmber.Overlay.dll, StreamEmber.Overlay.Host.exe, libcef.dll ve CEF dosyaları,
                              ui\, overlay.ini, logs\, cache\
-GTA V\scripts\               StreamEmber.Overlay.Bridge.dll, OverlayDemo.3.cs
+GTA V\scripts\               StreamEmber.Overlay.Bridge.dll, StreamEmber.TrainerDemo.dll
 ```
 
 ## Derleme
 
 Ön koşullar: Visual Studio 2022+ ("Desktop development with C++" + "C++ CMake tools"), .NET SDK,
-`../GTAVScriptHookRuntime` (ScriptHookV SDK'sı oradan alınır), cef-builds.spotifycdn.com erişimi.
+`../GTAVScriptHookRuntime` (ScriptHookV SDK'sı oradan alınır), `../MHud` (trainer arayüzü),
+`../GTAVScriptHook/lib/ScriptHookVDotNet3.dll` (trainer derleme başvurusu), cef-builds.spotifycdn.com erişimi.
 
 ```powershell
 .\build.ps1                    # CEF indir (ilk sefer ~150 MB), derle, dist\ hazırla
 .\build.ps1 -Deploy            # + oyuna kur (GTAV_GAME_PATH ya da GTAV_SCRIPT_PATH'in üst klasörü)
 .\build.ps1 -Deploy -GamePath "D:\EpicGames\GTAV"
 .\build.ps1 -UpdateCef         # desteklenen aralıktaki (152-156) en yeni stable CEF'e geç
+.\build.ps1 -Deploy -ResetConfig   # oyundaki overlay.ini'yi şablonla değiştir (StartUrl=mhud/trainer.html)
 ```
 
 Oyunda gerekenler: ScriptHookV + bizim SHVDN fork'umuz (`../GTAVScriptHookRuntime`), GTA V **Legacy**.
@@ -81,6 +85,45 @@ Loglar: `GTA V\StreamEmber\Overlay\logs\` → `gtav-backend.log`, `overlay.log`,
    "Oyuna gönder" → oyunda bildirim çıkmalı. "Oyuna dön" → menü modu kapanmalı.
 
 Geri bildirim için: hangi adımda ne görüldüğü + üç log dosyası.
+
+## Trainer demosu (MHud + performans testi)
+
+`samples/gtav/TrainerDemo` → `scripts\StreamEmber.TrainerDemo.dll`. Sayfa: `StartUrl=mhud/trainer.html`.
+
+Arayüz MHud'un FiveM sayfasıdır (`../MHud/integration/mhud/html`), **değiştirilmeden** kullanılır. `build.ps1`
+kiti ve sayfayı `ui\mhud\` altına kopyalar, `trainer.html`'i bu sayfaya yalnız `ui/trainer/trainer.css` ve
+`ui/trainer/trainer.js` ekleyerek üretir. `trainer.js` bir adaptördür:
+`window.streamember` mesajları → FiveM'deki gibi `window` `message` olayı; `MH.post(ad, veri)` → `streamember.post({ cb, data })`.
+C# scripti MHud'un Lua tarafıyla **aynı mesajları** gönderir (`mhud:config`, `mhud:vitals`, `mhud:vehicle`,
+`mhud:location`, `mhud:heading`, `mhud:wanted`, `mhud:money`, `mhud:nametags`, `mhud:menu`, `mhud` RPC).
+
+| Tuş | İş |
+|---|---|
+| F5 | Trainer menüsü (↑ ↓ ← → Enter Backspace ya da numpad 8 2 4 6 5 0). Oyun odağı gerekmez. |
+| F7 | Overlay göster/gizle (backend) |
+| F8 | Fare+klavye arayüze (backend). Menüye fareyle tıklanabilir. |
+
+Menüler: Işınlanma (11 nokta + harita işareti), Araçlar (ver, hızı koruyarak değiştir, tamir, renk, tam performans,
+sil), Oyuncu modeli (11 karakter), Oyuncu (can/zırh, ölümsüzlük, aranma, silah, para), Dünya (saat, hava, kalabalık),
+Performans testi, HUD (tema, bildirim vitrini).
+
+**Performans testi:** çevredeki tüm yaya ve araçlara MHud isim etiketi (`mhud:nametags`) her karede gönderilir.
+
+- *Native referans noktaları*: oyun, her etiketin çapasına **aynı karede** kırmızı nokta çizer. Etiketin alt ucu noktada
+  durmalı; kamera dönerken aradaki kayma overlay'in gecikmesidir.
+- *Kamerayı döndür*: kamerayı 45/90/180°/sn sabit döndürür (elle uğraşmadan senkron testi).
+- *Gidiş-dönüş gecikme*: her etiket mesajında `seq` var; sayfa saniyede ~2 örneği hemen onaylar (`ack`), C# ms ve kare
+  olarak ölçer. Ayarlar: mesafe 25-400 m, en fazla 25-400 etiket, her kare / 30 Hz / 15 Hz, hedef türü,
+  *mesafe yazısı adımı*.
+- Panel (sağ orta): oyun FPS, sayfa FPS, etiket sayısı, mesaj/sn, DOM süresi, C# süresi, KB/sn, gecikme.
+
+**Bulgu (headless Chromium, 150 etiket):** yalnız konum değişince güncelleme **~1 ms**; mesafe yazısı her mesajda
+değişince **~22 ms** (60 Hz'de karşılanamaz). Sebep: MHud `app.js` etiket imzasına (`sig`) mesafeyi koyuyor, imza
+değişince `MH.Nametags` etiketin HTML'ini baştan yazıyor. Trainer mesafeyi varsayılan 5 m adımla yuvarlar
+(menüden 1 m seçilerek fark ölçülebilir). Kalıcı çözüm MHud'da: mesafe metnini imzadan çıkarıp yalnız o metni güncellemek.
+
+Aynı anda tek bir script `SEO_PollFromUi` okumalı (çekirdekte tek gelen kutusu var). Bu yüzden `OverlayDemo.3.cs`
+artık kurulmaz; kurulum eski kopyayı `.disabled` yapar.
 
 ## Aşamalar
 

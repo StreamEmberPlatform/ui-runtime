@@ -1,0 +1,18 @@
+/* StreamEmber Trainer — additions on top of MHud. Colors only through MHud tokens. */
+.x-perf-anchor { top: 56%; }
+.x-perf { width: 360px; padding: 12px 14px; }
+.x-perf__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.x-perf__grid { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 12px; }
+.x-perf__k { color: var(--mh-text-3); white-space: nowrap; }
+.x-perf__v { color: var(--mh-text); text-align: right; font-weight: 600; }
+.x-perf__note { margin-top: 8px; font-size: 11px; line-height: 1.35; color: var(--mh-text-2); }
+
+.x-hint-anchor { bottom: 8px; }
+.x-hint { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--mh-text-3); opacity: .8; }
+body.x-menu-open .x-hint { opacity: 0; }
+
+/* MHud's classic menu is keyboard-only in FiveM; here it also takes mouse clicks in menu mode (F8) */
+#menu-host .mh-classic, #menu-host .mh-classic * { pointer-events: auto; }
+
+/* World tags can number in the hundreds here; keep the menu and the panel above them */
+#menu-host, .x-perf-anchor { z-index: 1000; }
