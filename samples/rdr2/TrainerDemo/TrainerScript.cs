@@ -39,6 +39,7 @@ namespace StreamEmber.TrainerDemo
         private double _gameFps;
         private double _avgTickMs;
         private bool _announcedNotInstalled;
+        private bool _paused;   // death / respawn / loading / fade: trainer work suspended
 
         public TrainerScript()
         {
@@ -87,9 +88,20 @@ namespace StreamEmber.TrainerDemo
                 foreach (eInputType c in MenuBlockedControls) Native.DisableControl(c);
             }
 
-            _trainer.Tick(ped, dt);
+            // Death, respawn, loading screens and fades: the game is streaming the world and runs its own scripted
+            // sequence. World tags scan every ped/vehicle with several natives each (each one a thread hand-off in
+            // ScriptHookRDRDotNet), so stay out of the way until the screen is back.
+            bool busy = ped == null || !ped.Exists() || ped.IsDead || Game.IsLoading ||
+                        Game.IsScreenFadedOut || Game.IsScreenFadingOut || Game.IsScreenFadingIn;
+            if (busy != _paused)
+            {
+                _paused = busy;
+                if (busy) _tags.Clear();
+            }
 
-            if (Ui.Ready)
+            if (!busy) _trainer.Tick(ped, dt);
+
+            if (Ui.Ready && !busy)
             {
                 _hud.Tick(player, ped);
                 _tags.Tick(Game.FrameCount);

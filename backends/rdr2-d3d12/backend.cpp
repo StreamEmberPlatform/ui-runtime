@@ -27,6 +27,7 @@
 #include <dxgi1_6.h>
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -90,6 +91,99 @@ CreateSwapChainFn g_origCreateSwapChain = nullptr;
 CreateSwapChainForHwndFn g_origCreateSwapChainForHwnd = nullptr;
 
 HMODULE g_module = nullptr;
+
+// --- Diagnostics: logs\rdr2-diag.log ---------------------------------------------------------------------------
+// DXGI events (swap chain creation, resizes, failed presents, device removal), a heartbeat, and every serious
+// exception with the module it happened in. Written raw and allocation free, so the vectored exception handler can
+// use it too. Capped, so a stream of first-chance exceptions cannot fill the disk.
+HANDLE g_diag = INVALID_HANDLE_VALUE;
+volatile LONG g_diagLines = 0;
+constexpr LONG kMaxDiagLines = 2000;
+std::atomic<unsigned long long> g_presentCount{0};
+std::atomic<unsigned long long> g_drawCount{0};
+std::atomic<DWORD> g_lastPresentThread{0};
+std::atomic<unsigned long long> g_lastHeartbeat{0};
+volatile LONG g_failedPresents = 0;
+
+void Diag(const char* format, ...) {
+  if (g_diag == INVALID_HANDLE_VALUE || InterlockedIncrement(&g_diagLines) > kMaxDiagLines) {
+    return;
+  }
+  char line[1100];
+  SYSTEMTIME t;
+  GetLocalTime(&t);
+  int n = wsprintfA(line, "[%02u:%02u:%02u.%03u] [T%lu] ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds,
+                    GetCurrentThreadId());
+  va_list args;
+  va_start(args, format);
+  n += wvsprintfA(line + n, format, args);  // at most 1024 chars
+  va_end(args);
+  line[n++] = '\r';
+  line[n++] = '\n';
+  DWORD written = 0;
+  WriteFile(g_diag, line, static_cast<DWORD>(n), &written, nullptr);
+}
+
+void DiagOpen() {
+  wchar_t dir[MAX_PATH] = {};
+  if (GetModuleFileNameW(g_module, dir, MAX_PATH) == 0) return;
+  wchar_t* slash = wcsrchr(dir, L'\\');
+  if (slash == nullptr) return;
+  *slash = 0;
+  const wchar_t* parts[] = {L"\\StreamEmber", L"\\Overlay", L"\\logs"};
+  for (const wchar_t* part : parts) {
+    if (lstrlenW(dir) + lstrlenW(part) + 20 >= MAX_PATH) return;
+    lstrcatW(dir, part);
+    CreateDirectoryW(dir, nullptr);
+  }
+  lstrcatW(dir, L"\\rdr2-diag.log");
+  g_diag = CreateFileW(dir, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+}
+
+const char* ModuleOf(const void* address, char (&buffer)[MAX_PATH], unsigned long long& offset) {
+  HMODULE module = nullptr;
+  buffer[0] = '?';
+  buffer[1] = 0;
+  offset = reinterpret_cast<unsigned long long>(address);
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         static_cast<LPCSTR>(address), &module) &&
+      module != nullptr && GetModuleFileNameA(module, buffer, MAX_PATH) != 0) {
+    offset -= reinterpret_cast<unsigned long long>(module);
+  }
+  const char* base = strrchr(buffer, '\\');
+  return base != nullptr ? base + 1 : buffer;
+}
+
+LONG CALLBACK DiagExceptionHandler(EXCEPTION_POINTERS* info) {
+  const DWORD code = info->ExceptionRecord->ExceptionCode;
+  // Only errors (0xC...); skip C++ throws (0xE06D7363), debugger messages, guard pages used by stacks
+  if (code < 0xC0000000u || code == 0xE06D7363u) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  static volatile LONG lastCode = 0;
+  static void* volatile lastAddress = nullptr;
+  void* address = info->ExceptionRecord->ExceptionAddress;
+  if (static_cast<LONG>(code) == lastCode && address == lastAddress) {
+    return EXCEPTION_CONTINUE_SEARCH;  // same fault repeating
+  }
+  lastCode = static_cast<LONG>(code);
+  lastAddress = address;
+  char module[MAX_PATH];
+  unsigned long long offset = 0;
+  const char* name = ModuleOf(address, module, offset);
+  if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2) {
+    const unsigned long long target = info->ExceptionRecord->ExceptionInformation[1];
+    Diag("exception 0x%08lX (access violation, %s 0x%08lX%08lX) at %s+0x%08lX%08lX (first chance)", code,
+         info->ExceptionRecord->ExceptionInformation[0] == 0 ? "read" :
+         info->ExceptionRecord->ExceptionInformation[0] == 1 ? "write" : "execute",
+         static_cast<unsigned long>(target >> 32), static_cast<unsigned long>(target), name,
+         static_cast<unsigned long>(offset >> 32), static_cast<unsigned long>(offset));
+  } else {
+    Diag("exception 0x%08lX at %s+0x%08lX%08lX (first chance)", code, name, static_cast<unsigned long>(offset >> 32),
+         static_cast<unsigned long>(offset));
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
 std::atomic<bool> g_presentSeen{false};
 thread_local int t_inPresent = 0;  // >0 while inside the game's Present (other overlays submit work there too)
 thread_local bool t_presentThread = false;  // this thread has called Present (only its submissions are recorded)
@@ -342,6 +436,7 @@ void DrawOverlay(IDXGISwapChain3* swapChain, ID3D12Device* device12) {
   }
   if (device12->GetDeviceRemovedReason() != S_OK) {
     if (s.device11 != nullptr) {
+      Diag("D3D12 device removed, reason 0x%08lX", static_cast<unsigned long>(device12->GetDeviceRemovedReason()));
       BLogError("D3D12 device removed: " + Hex(static_cast<unsigned long>(device12->GetDeviceRemovedReason())));
       ReleaseDevice(s, false);  // let the game get a fresh device
     }
@@ -373,11 +468,13 @@ void DrawOverlay(IDXGISwapChain3* swapChain, ID3D12Device* device12) {
       g_renderer->Draw(b.rtv, /*preserveState=*/false);  // our own context: nothing of the game's to restore
       s.on12->ReleaseWrappedResources(&b.wrapped, 1);
       s.context11->Flush();  // submits on the game's queue, ahead of the Present below
+      g_drawCount.fetch_add(1, std::memory_order_relaxed);
     }
   }
 }
 
 void ReportException(const char* where, DWORD code) {
+  Diag("overlay disabled after exception 0x%08lX in %s", code, where);
   BLogError(std::string("Exception in ") + where + " (code " + Hex(code) +
             "); overlay drawing disabled for this session.");
 }
@@ -437,8 +534,36 @@ void GuardedReleaseFor(IDXGISwapChain3* swapChain, HWND window) {
   }
 }
 
+void PresentBookkeeping() {
+  const unsigned long long presents = g_presentCount.fetch_add(1, std::memory_order_relaxed) + 1;
+  const DWORD thread = GetCurrentThreadId();
+  const DWORD previous = g_lastPresentThread.exchange(thread);
+  if (previous != thread) {
+    Diag("present thread %lu -> %lu (present #%lu)", previous, thread, static_cast<unsigned long>(presents));
+  }
+  const unsigned long long now = GetTickCount64();
+  unsigned long long last = g_lastHeartbeat.load();
+  if (now - last >= 30000 && g_lastHeartbeat.compare_exchange_strong(last, now)) {
+    Diag("heartbeat: presents %lu, overlay draws %lu, disabled %d", static_cast<unsigned long>(presents),
+         static_cast<unsigned long>(g_drawCount.load()), g_backendDisabled ? 1 : 0);
+  }
+}
+
+void AfterPresent(IDXGISwapChain* swapChain, HRESULT hr) {
+  if (FAILED(hr) && InterlockedIncrement(&g_failedPresents) <= 20) {
+    unsigned long reason = 0;
+    ID3D12Device* device12 = nullptr;
+    if (SUCCEEDED(swapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device12)))) {
+      reason = static_cast<unsigned long>(device12->GetDeviceRemovedReason());
+      device12->Release();
+    }
+    Diag("Present failed 0x%08lX (device removed reason 0x%08lX)", static_cast<unsigned long>(hr), reason);
+  }
+}
+
 void OnPresentCommon(IDXGISwapChain* rawSwapChain, UINT flags) {
   g_presentSeen.store(true);
+  PresentBookkeeping();
   if ((flags & DXGI_PRESENT_TEST) != 0 || t_inPresent > 1 || g_backendDisabled || rawSwapChain == nullptr) {
     return;
   }
@@ -460,6 +585,7 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swapChain, UINT syncInterv
   ++t_inPresent;
   OnPresentCommon(swapChain, flags);
   const HRESULT hr = g_origPresent(swapChain, syncInterval, flags);
+  AfterPresent(swapChain, hr);
   --t_inPresent;
   return hr;
 }
@@ -470,6 +596,7 @@ HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* swapChain, UINT syncInte
   ++t_inPresent;
   OnPresentCommon(swapChain, flags);
   const HRESULT hr = g_origPresent1(swapChain, syncInterval, flags, params);
+  AfterPresent(swapChain, hr);
   --t_inPresent;
   return hr;
 }
@@ -485,15 +612,21 @@ void BeforeResize(IDXGISwapChain* swapChain) {
 
 HRESULT STDMETHODCALLTYPE HookResizeBuffers(IDXGISwapChain* swapChain, UINT count, UINT width, UINT height,
                                             DXGI_FORMAT format, UINT flags) {
+  Diag("ResizeBuffers(count %u, %ux%u, format %d, flags 0x%X)", count, width, height, static_cast<int>(format), flags);
   BeforeResize(swapChain);
-  return g_origResizeBuffers(swapChain, count, width, height, format, flags);
+  const HRESULT hr = g_origResizeBuffers(swapChain, count, width, height, format, flags);
+  if (FAILED(hr)) Diag("ResizeBuffers failed 0x%08lX", static_cast<unsigned long>(hr));
+  return hr;
 }
 
 HRESULT STDMETHODCALLTYPE HookResizeBuffers1(IDXGISwapChain3* swapChain, UINT count, UINT width, UINT height,
                                              DXGI_FORMAT format, UINT flags, const UINT* nodeMasks,
                                              IUnknown* const* queues) {
+  Diag("ResizeBuffers1(count %u, %ux%u, format %d, flags 0x%X)", count, width, height, static_cast<int>(format), flags);
   BeforeResize(swapChain);
-  return g_origResizeBuffers1(swapChain, count, width, height, format, flags, nodeMasks, queues);
+  const HRESULT hr = g_origResizeBuffers1(swapChain, count, width, height, format, flags, nodeMasks, queues);
+  if (FAILED(hr)) Diag("ResizeBuffers1 failed 0x%08lX", static_cast<unsigned long>(hr));
+  return hr;
 }
 
 // A new swap chain on our window: release everything first (our wrapped back buffers keep the old swap chain
@@ -515,16 +648,30 @@ void BeforeCreateSwapChain(IUnknown* device, HWND window) {
 
 HRESULT STDMETHODCALLTYPE HookCreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc,
                                               IDXGISwapChain** swapChain) {
+  if (desc != nullptr) {
+    Diag("CreateSwapChain(window %p, %ux%u, format %d, buffers %u, windowed %d)", desc->OutputWindow,
+         desc->BufferDesc.Width, desc->BufferDesc.Height, static_cast<int>(desc->BufferDesc.Format), desc->BufferCount,
+         desc->Windowed ? 1 : 0);
+  }
   BeforeCreateSwapChain(device, desc != nullptr ? desc->OutputWindow : nullptr);
-  return g_origCreateSwapChain(factory, device, desc, swapChain);
+  const HRESULT hr = g_origCreateSwapChain(factory, device, desc, swapChain);
+  Diag("CreateSwapChain -> 0x%08lX", static_cast<unsigned long>(hr));
+  return hr;
 }
 
 HRESULT STDMETHODCALLTYPE HookCreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknown* device, HWND window,
                                                      const DXGI_SWAP_CHAIN_DESC1* desc,
                                                      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen,
                                                      IDXGIOutput* output, IDXGISwapChain1** swapChain) {
+  if (desc != nullptr) {
+    Diag("CreateSwapChainForHwnd(window %p, %ux%u, format %d, buffers %u, flags 0x%X, fullscreen desc %d)", window,
+         desc->Width, desc->Height, static_cast<int>(desc->Format), desc->BufferCount, desc->Flags,
+         fullscreen != nullptr ? (fullscreen->Windowed ? 0 : 1) : -1);
+  }
   BeforeCreateSwapChain(device, window);
-  return g_origCreateSwapChainForHwnd(factory, device, window, desc, fullscreen, output, swapChain);
+  const HRESULT hr = g_origCreateSwapChainForHwnd(factory, device, window, desc, fullscreen, output, swapChain);
+  Diag("CreateSwapChainForHwnd -> 0x%08lX", static_cast<unsigned long>(hr));
+  return hr;
 }
 
 void STDMETHODCALLTYPE HookExecuteCommandLists(ID3D12CommandQueue* queue, UINT count,
@@ -660,6 +807,9 @@ void WriteEarlyLog(const char* message) {
 }
 
 void InstallHooksThread() {
+  DiagOpen();
+  Diag("StreamEmber.Overlay.RDR2 loaded; diagnostics on");
+  AddVectoredExceptionHandler(1, &DiagExceptionHandler);
   Targets t;
   if (!FindTargets(t)) {
     WriteEarlyLog("[ERROR] D3D12 is not available on this system; overlay disabled.\r\n");
@@ -696,6 +846,7 @@ void InstallHooksThread() {
     return;
   }
   OutputDebugStringA("[StreamEmber.Overlay.RDR2] DXGI/D3D12 hooks installed.\n");
+  Diag("DXGI/D3D12 hooks installed");
 
   // Watchdog: tell the user why nothing shows up when the game runs on Vulkan
   for (int i = 0; i < 180 && !g_presentSeen.load(); ++i) {
@@ -729,6 +880,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
       }
       break;
     case DLL_PROCESS_DETACH:
+      // Reached on a normal exit (ExitProcess); a crash or TerminateProcess never gets here
+      seo_rdr2::Diag("process detach (%s)", reserved != nullptr ? "process exit" : "FreeLibrary");
       if (reserved == nullptr) {
         // FreeLibrary (not process exit; ASIs are normally never unloaded): our code is about to go away, so the
         // hooks must too.

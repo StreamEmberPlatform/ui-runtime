@@ -215,7 +215,14 @@ class BrowserApp : public CefApp {
     command_line->AppendSwitch("disable-gpu-compositing");
     command_line->AppendSwitch("allow-file-access-from-files");
     command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
-    command_line->AppendSwitchWithValue("disable-features", "HardwareMediaKeyHandling");
+    // Inside a game: no background services (component updates, extension sync, on-device ML models, ...)
+    command_line->AppendSwitch("disable-background-networking");
+    command_line->AppendSwitch("disable-component-update");
+    command_line->AppendSwitch("disable-extensions");
+    command_line->AppendSwitchWithValue(
+        "disable-features",
+        "HardwareMediaKeyHandling,OptimizationGuideModelDownloading,OptimizationHints,OptimizationHintsFetching,"
+        "OptimizationTargetPrediction,OnDeviceModelPerformanceParams,MediaRouter,Translate");
   }
 
  private:
