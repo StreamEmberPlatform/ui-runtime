@@ -51,7 +51,7 @@ namespace StreamEmber.TrainerDemo
                 if (state == OverlayState.NotInstalled && !_announcedNotInstalled)
                 {
                     _announcedNotInstalled = true;
-                    GTA.UI.Notification.PostTicker("StreamEmber Trainer: overlay kurulu değil (StreamEmber\\Overlay).", true);
+                    Native.Notify("StreamEmber Trainer: overlay kurulu değil (StreamEmber\\Overlay).");
                 }
                 return;
             }

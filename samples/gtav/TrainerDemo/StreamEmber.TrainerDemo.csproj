@@ -11,7 +11,11 @@
     <Nullable>disable</Nullable>
     <NoWarn>$(NoWarn);CS0649</NoWarn>
     <Version>0.1.0</Version>
-    <!-- Compile-time reference only; the game provides ScriptHookVDotNet3.dll -->
+    <!-- Compile-time reference only; the game provides ScriptHookVDotNet3.dll at runtime.
+         It MUST be the same build as the one in the game: prefer our fork's output (GTAVScriptHookRuntime).
+         A different nightly fails at runtime with MissingMethodException (e.g. GTA.FeedPost vs GTA.UI.FeedPost). -->
+    <ShvdnRuntimeDll>$(MSBuildThisFileDirectory)..\..\..\..\GTAVScriptHookRuntime\bin\Release\ScriptHookVDotNet3.dll</ShvdnRuntimeDll>
+    <ShvdnReferencePath Condition="'$(ShvdnReferencePath)' == '' And Exists('$(ShvdnRuntimeDll)')">$(ShvdnRuntimeDll)</ShvdnReferencePath>
     <ShvdnReferencePath Condition="'$(ShvdnReferencePath)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\GTAVScriptHook\lib\ScriptHookVDotNet3.dll</ShvdnReferencePath>
   </PropertyGroup>
 

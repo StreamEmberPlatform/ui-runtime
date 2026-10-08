@@ -116,6 +116,14 @@ namespace StreamEmber.TrainerDemo
             Function.Call(Hash.TOGGLE_VEHICLE_MOD, v, 18, true); // turbo
         }
 
+        /// <summary>GTA feed (ticker) notification through natives, independent of SHVDN's Notification API.</summary>
+        public static void Notify(string text)
+        {
+            Function.Call(Hash.BEGIN_TEXT_COMMAND_THEFEED_POST, "STRING");
+            Function.Call(Hash.ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME, text);
+            Function.Call(Hash.END_TEXT_COMMAND_THEFEED_POST_TICKER, false, true);
+        }
+
         public static void SetColors(Vehicle v, int primary, int secondary)
             => Function.Call(Hash.SET_VEHICLE_COLOURS, v, primary, secondary);
     }
