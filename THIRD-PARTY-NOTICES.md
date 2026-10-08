@@ -15,13 +15,7 @@ Chromium Embedded Framework (CEF)
 MinHook (RDR2 package only)
   https://github.com/TsudaKageyu/minhook
   BSD 2-Clause license: MinHook.LICENSE.txt
-  Statically linked into StreamEmber.Overlay.RDR2.asi.
-
-MHud
-  https://github.com/StreamEmberPlatform/mhud
-  MIT license: MHud.LICENSE.txt
-  Files: StreamEmber\Overlay\ui\mhud\. Fonts and icons bundled with the kit are listed in
-  StreamEmber\Overlay\ui\mhud\kit\LICENSES.md.
+  Statically linked into StreamEmber.Overlay.RDR2.asi (sources in vendor/minhook).
 
 Script Hook V / Script Hook RDR2 (Alexander Blade) are not included; players install them from
 http://www.dev-c.com/.

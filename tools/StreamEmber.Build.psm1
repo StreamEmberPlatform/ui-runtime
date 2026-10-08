@@ -144,7 +144,7 @@ function New-SEPackage {
     Copies a staged layout into the game folder.
 .DESCRIPTION
     - Files listed in -Preserve (user settings) are only written when missing, unless -ResetConfig.
-    - Files listed in -Conflicts that exist in the game folder are renamed to <name>.disabled (never deleted).
+    - Files or folders listed in -Conflicts that exist in the game folder are renamed to <name>.disabled (never deleted).
 #>
 function Install-SEPackage {
     param(
@@ -166,7 +166,7 @@ function Install-SEPackage {
         $path = Join-Path $GameDirectory $conflict
         if (Test-Path $path) {
             $disabled = "$path.disabled"
-            if (Test-Path $disabled) { Remove-Item $disabled -Force }
+            if (Test-Path $disabled) { Remove-Item $disabled -Recurse -Force }
             Move-Item $path $disabled
             Write-Warning "Disabled conflicting file: $conflict -> $conflict.disabled"
         }

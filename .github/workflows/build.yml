@@ -4,13 +4,9 @@
 #   main'e her push              → derle, v1.0.N etiketi ve GitHub Release:
 #                                    StreamEmber.Overlay.GTAV-1.0.N.zip, StreamEmber.Overlay.RDR2-1.0.N.zip (+ .sha256)
 #
-# Bağımlılıklar:
-#   CEF        cef.lock ile sabit (SHA-1 doğrulanır), önbelleklenir
-#   MHud       mhud.lock ile sabit commit (StreamEmberPlatform/mhud)
-#   Runtime    trainer'lar StreamEmber.Scripting.<OYUN>.dll'e karşı derlenir: gtav-runtime-scripthook ve
-#              rdr2-runtime-scripthook depolarının SON release'inden indirilir (sha256 doğrulanır).
-#              Bu depolar private ise: Settings > Secrets > Actions > PLATFORM_TOKEN
-#              (fine-grained token, bu iki depoya "Contents: Read").
+# Overlay yalnız motordur: sayfa, trainer ya da arayüz kiti içermez (scriptler sayfalarını CDN'den yükler).
+# Bağımlılıklar: CEF cef.lock ile sabit (SHA-1 doğrulanır, önbelleklenir); ScriptHookV SDK alt kümesi ve MinHook
+# vendor/ altında depodadır.
 #
 # Sürüm: VERSION dosyası (major.minor) + o dosyanın son değiştiği commit'ten bu yana commit sayısı (patch).
 # Minör/majör artırmak = VERSION'ı değiştirip pushlamak (o commit x.y.0 olur). Ayrıntı: tools/StreamEmber.Build.psm1
@@ -29,9 +25,6 @@ permissions:
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
-env:
-  PLATFORM_OWNER: StreamEmberPlatform
 
 jobs:
   build:
@@ -56,48 +49,6 @@ jobs:
           "release=$($release.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           Write-Host "Sürüm: $version (release: $release)"
 
-      - name: MHud sürümü (mhud.lock)
-        id: mhud
-        shell: pwsh
-        run: |
-          $lock = Get-Content mhud.lock -Raw | ConvertFrom-Json
-          "repository=$($lock.repository)" >> $env:GITHUB_OUTPUT
-          "commit=$($lock.commit)" >> $env:GITHUB_OUTPUT
-          Write-Host "MHud: $($lock.repository) $($lock.ref) ($($lock.commit))"
-
-      - name: MHud
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ steps.mhud.outputs.repository }}
-          ref: ${{ steps.mhud.outputs.commit }}
-          path: _deps/mhud
-          token: ${{ secrets.PLATFORM_TOKEN || github.token }}
-          persist-credentials: false
-
-      - name: Runtime API'leri (son release'ler)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.PLATFORM_TOKEN || github.token }}
-        run: |
-          $out = New-Item -ItemType Directory -Force -Path _deps/scripting
-          $runtimes = @(
-            @{ Repo = 'gtav-runtime-scripthook'; Id = 'StreamEmber.Runtime.GTAV'; Dll = 'StreamEmber.Scripting.GTAV.dll' },
-            @{ Repo = 'rdr2-runtime-scripthook'; Id = 'StreamEmber.Runtime.RDR2'; Dll = 'StreamEmber.Scripting.RDR2.dll' })
-          foreach ($r in $runtimes) {
-            $dir = "_deps/releases/$($r.Id)"
-            gh release download --repo "$env:PLATFORM_OWNER/$($r.Repo)" --pattern "$($r.Id)-*" --dir $dir --clobber
-            if ($LASTEXITCODE -ne 0) {
-              throw "$env:PLATFORM_OWNER/$($r.Repo) release'i indirilemedi. Depoda en az bir release olmalı; depo private ise PLATFORM_TOKEN secret'ı gerekli."
-            }
-            $zip = Get-ChildItem $dir -Filter "$($r.Id)-*.zip" | Select-Object -First 1
-            $expected = (Get-Content "$($zip.FullName).sha256" -Raw).Trim().Split(' ')[0]
-            $actual = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $expected) { throw "$($zip.Name): SHA-256 tutmuyor ($actual != $expected)" }
-            Expand-Archive $zip.FullName -DestinationPath "$dir/content" -Force
-            Copy-Item "$dir/content/StreamEmber/Runtime/$($r.Dll)" $out
-            Write-Host "$($zip.Name) -> $($r.Dll)"
-          }
-
       - name: CEF önbelleği
         uses: actions/cache@v6
         with:
@@ -106,7 +57,7 @@ jobs:
 
       - name: Derle ve paketle
         shell: pwsh
-        run: ./build.ps1 -Version '${{ steps.version.outputs.version }}' -MHudPath _deps/mhud -ScriptingDir _deps/scripting
+        run: ./build.ps1 -Version '${{ steps.version.outputs.version }}'
 
       - name: Paket içeriği kontrolü
         shell: pwsh
@@ -115,11 +66,10 @@ jobs:
             $stage = "dist/$game"
             $expected = @("StreamEmber.Overlay.$game.asi",
                           'StreamEmber/Overlay/StreamEmber.Overlay.dll', 'StreamEmber/Overlay/StreamEmber.Overlay.Host.exe',
-                          'StreamEmber/Overlay/libcef.dll', 'StreamEmber/Overlay/ui/mhud/trainer.html',
-                          'StreamEmber/Scripts/StreamEmber.Overlay.Bridge.dll', "StreamEmber/Scripts/StreamEmber.Trainer.$game.dll",
+                          'StreamEmber/Overlay/libcef.dll', 'StreamEmber/Scripts/StreamEmber.Overlay.Bridge.dll',
                           'StreamEmber/Config/Overlay.ini', "StreamEmber/Manifests/StreamEmber.Overlay.$game.json")
             foreach ($f in $expected) { if (-not (Test-Path (Join-Path $stage $f))) { throw "$game paketinde yok: $f" } }
-            $unwanted = Get-ChildItem $stage -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml', '.lib', '.exp', '.ilk' }
+            $unwanted = Get-ChildItem $stage -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml', '.lib', '.exp', '.ilk', '.html' }
             if ($unwanted) { throw "$game paketinde istenmeyen dosya: $($unwanted.Name -join ', ')" }
             $count = (Get-ChildItem $stage -Recurse -File).Count
             Write-Host "$game`: $count dosya"

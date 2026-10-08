@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -55,7 +56,11 @@ struct Shared {
   std::atomic<int> viewHeight{720};
 
   std::wstring baseDir;
-  std::string startUrl;
+  // Page: `url` = what scripts asked for (SEO_LoadUrl / Overlay.ini StartUrl), `browserUrl` = what the browser was
+  // last told to load. Both normalized (NormalizeUrl).
+  std::mutex urlMutex;
+  std::string url;
+  std::string browserUrl;
   int frameRate = 60;
 
   std::mutex frameMutex;
@@ -167,6 +172,56 @@ void UpdateEffectiveAtlas() {
   });
 }
 
+// <game>\StreamEmber, from this DLL's own location (<game>\StreamEmber\Overlay\StreamEmber.Overlay.dll); valid
+// before SEO_Initialize too.
+std::wstring ModuleRoot() {
+  HMODULE self = nullptr;
+  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                     reinterpret_cast<LPCWSTR>(&ModuleRoot), &self);
+  wchar_t path[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameW(self, path, MAX_PATH);
+  std::wstring dir(path, length);
+  const size_t slash = dir.find_last_of(L"\\/");
+  return StreamEmberRoot(slash == std::wstring::npos ? dir : dir.substr(0, slash));
+}
+
+// "" -> about:blank (transparent, nothing drawn); URLs with a scheme as they are; anything else is a file path,
+// relative to <game>\StreamEmber (local development pages).
+std::string NormalizeUrl(const std::string& input) {
+  size_t begin = 0, end = input.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(input[begin]))) ++begin;
+  while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1]))) --end;
+  const std::string url = input.substr(begin, end - begin);
+  if (url.empty()) {
+    return "about:blank";
+  }
+  if (url.find("://") != std::string::npos || url.rfind("about:", 0) == 0 || url.rfind("data:", 0) == 0) {
+    return url;
+  }
+  std::wstring path = FromUtf8(url);
+  const bool absolute = (path.size() > 2 && path[1] == L':') || path.rfind(L"\\\\", 0) == 0;
+  if (!absolute) {
+    path = ModuleRoot() + L"\\" + path;
+  }
+  std::replace(path.begin(), path.end(), L'\\', L'/');
+  return "file:///" + ToUtf8(path);
+}
+
+// UI thread only
+void NavigateIfChanged(CefRefPtr<CefBrowser> browser) {
+  std::string url;
+  {
+    std::lock_guard<std::mutex> lock(S().urlMutex);
+    if (S().url == S().browserUrl) {
+      return;
+    }
+    url = S().url;
+    S().browserUrl = url;
+  }
+  LogInfo("Loading " + url);
+  browser->GetMainFrame()->LoadURL(url);
+}
+
 // UI thread only
 void ExecuteDispatch(CefRefPtr<CefBrowser> browser, const std::string& code) {
   browser->GetMainFrame()->ExecuteJavaScript(code, "streamember://bridge", 0);
@@ -267,6 +322,7 @@ class OverlayClient : public CefClient,
     browser->GetHost()->WasHidden(S().visible.load() == 0);
     browser->GetHost()->SetFocus(S().inputMode.load() == SEO_INPUT_UI);
     LogInfo("Browser created.");
+    NavigateIfChanged(browser);  // SEO_LoadUrl while the browser was being created
   }
 
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
@@ -439,12 +495,11 @@ void CreateBrowserOnUiThread() {
   browserSettings.windowless_frame_rate = S().frameRate;
   browserSettings.background_color = CefColorSetARGB(0, 0, 0, 0);  // transparent page background
 
-  // Empty = ui/index.html; no scheme = path relative to ui/ (e.g. "mhud/trainer.html"); otherwise a full URL
-  std::string url = S().startUrl;
-  if (url.empty() || url.find("://") == std::string::npos) {
-    std::wstring path = S().baseDir + L"\\ui\\" + (url.empty() ? std::wstring(L"index.html") : FromUtf8(url));
-    std::replace(path.begin(), path.end(), L'\\', L'/');
-    url = "file:///" + ToUtf8(path);
+  std::string url;
+  {
+    std::lock_guard<std::mutex> lock(S().urlMutex);
+    url = S().url;
+    S().browserUrl = url;
   }
   LogInfo("Creating browser: " + url);
   if (!CefBrowserHost::CreateBrowser(windowInfo, new OverlayClient(), url, browserSettings, nullptr, nullptr)) {
@@ -545,7 +600,12 @@ SEO_API int32_t SEO_CALL SEO_Initialize(const SEO_InitParams* params) {
   S().state.store(SEO_STATE_STARTING);
 
   S().baseDir = params->baseDir;
-  S().startUrl = (params->startUrl != nullptr) ? params->startUrl : "";
+  {
+    std::lock_guard<std::mutex> lock(S().urlMutex);
+    if (S().url.empty()) {  // a script may have called SEO_LoadUrl before the backend started the core
+      S().url = NormalizeUrl(params->startUrl != nullptr ? params->startUrl : "");
+    }
+  }
   S().frameRate = (params->frameRate <= 0 || params->frameRate > 60) ? 60 : params->frameRate;
   if (params->width > 0 && params->height > 0) {
     S().viewWidth.store(params->width);
@@ -814,6 +874,41 @@ SEO_API void SEO_CALL SEO_SetSpriteDelay(int32_t frames) {
 
 SEO_API int32_t SEO_CALL SEO_GetSpriteDelay(void) {
   return S().spriteDelay.load();
+}
+
+SEO_API int32_t SEO_CALL SEO_LoadUrl(const char* utf8Url, int32_t reloadIfSame) {
+  const std::string url = NormalizeUrl(utf8Url != nullptr ? utf8Url : "");
+  {
+    std::lock_guard<std::mutex> lock(S().urlMutex);
+    if (url == S().url && !reloadIfSame) {
+      return 0;
+    }
+    S().url = url;
+    if (reloadIfSame) {
+      S().browserUrl.clear();  // forces NavigateIfChanged to load it again
+    }
+  }
+  // Not running yet: the browser is created with S().url (or navigates right after creation)
+  PostUi([]() {
+    if (CefRefPtr<CefBrowser> browser = GetBrowser()) {
+      NavigateIfChanged(browser);
+    }
+  });
+  return 1;
+}
+
+SEO_API int32_t SEO_CALL SEO_GetUrl(char* buffer, int32_t bufferSize) {
+  std::string url;
+  {
+    std::lock_guard<std::mutex> lock(S().urlMutex);
+    url = S().url;
+  }
+  const int32_t required = static_cast<int32_t>(url.size()) + 1;
+  if (buffer == nullptr || bufferSize < required) {
+    return -required;
+  }
+  std::memcpy(buffer, url.c_str(), static_cast<size_t>(required));
+  return required - 1;
 }
 
 }  // extern "C"

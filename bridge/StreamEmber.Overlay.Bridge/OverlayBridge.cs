@@ -57,7 +57,7 @@ namespace StreamEmber.Overlay
 
     public static class OverlayBridge
     {
-        public const int ApiVersion = 2;
+        public const int ApiVersion = 3;
         public const int MaxSprites = 512;
         private const string CoreDll = "StreamEmber.Overlay.dll";
 
@@ -81,7 +81,7 @@ namespace StreamEmber.Overlay
             get { return EnsureLoaded() ? (OverlayState)SEO_GetState() : OverlayState.NotInstalled; }
         }
 
-        /// <summary>True when the page is loaded and messages can flow.</summary>
+        /// <summary>True when the overlay browser runs. Messages sent before the page finished loading are queued.</summary>
         public static bool IsReady
         {
             get { return State == OverlayState.Ready; }
@@ -97,6 +97,40 @@ namespace StreamEmber.Overlay
         {
             get { return EnsureLoaded() && SEO_GetInputMode() == 1 ? OverlayInputMode.Ui : OverlayInputMode.Game; }
             set { if (EnsureLoaded()) SEO_SetInputMode((int)value); }
+        }
+
+        /// <summary>
+        /// Loads the overlay page (the overlay ships none of its own). Full URL (https://, file://), "" = blank,
+        /// anything else = file path relative to &lt;game&gt;\StreamEmber. Loading the URL that is already open does
+        /// nothing unless <paramref name="reloadIfSame"/>. Returns true when a navigation was started or queued.
+        /// </summary>
+        public static bool LoadUrl(string url, bool reloadIfSame = false)
+        {
+            if (!EnsureLoaded())
+            {
+                return false;
+            }
+            return SEO_LoadUrl(ToUtf8Z(url ?? string.Empty), reloadIfSame ? 1 : 0) != 0;
+        }
+
+        /// <summary>Current page URL (normalized), or null when the overlay is not available.</summary>
+        public static string Url
+        {
+            get
+            {
+                if (!EnsureLoaded())
+                {
+                    return null;
+                }
+                byte[] buffer = new byte[2048];
+                int length = SEO_GetUrl(buffer, buffer.Length);
+                if (length < 0)
+                {
+                    buffer = new byte[-length];
+                    length = SEO_GetUrl(buffer, buffer.Length);
+                }
+                return length >= 0 ? Encoding.UTF8.GetString(buffer, 0, length) : null;
+            }
         }
 
         /// <summary>Sends a JSON text to the page (window.streamember.on listeners). Returns false if not available.</summary>
@@ -257,5 +291,11 @@ namespace StreamEmber.Overlay
 
         [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern int SEO_GetSpriteDelay();
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int SEO_LoadUrl(byte[] utf8Url, int reloadIfSame);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int SEO_GetUrl(byte[] buffer, int bufferSize);
     }
 }

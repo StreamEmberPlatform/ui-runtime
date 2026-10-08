@@ -22,7 +22,7 @@ extern "C" {
 #endif
 #define SEO_CALL __cdecl
 
-#define SEO_API_VERSION 2
+#define SEO_API_VERSION 3
 
 // SEO_GetState()
 #define SEO_STATE_FAILED   (-1)
@@ -61,7 +61,7 @@ extern "C" {
 typedef struct SEO_InitParams {
   uint32_t structSize;      // sizeof(SEO_InitParams)
   const wchar_t* baseDir;   // folder with StreamEmber.Overlay.dll, libcef.dll and the host exe (no trailing slash)
-  const char* startUrl;     // UTF-8; NULL/"" = <baseDir>/ui/index.html, no scheme = path under ui/, else full URL
+  const char* startUrl;     // UTF-8; NULL/"" = about:blank (nothing drawn), else see SEO_LoadUrl
   int32_t width;            // initial view size in pixels
   int32_t height;
   int32_t frameRate;        // 1..60, 0 = 60
@@ -155,6 +155,14 @@ SEO_API int32_t SEO_CALL SEO_GetSprites(SEO_Sprite* out, int32_t maxCount);
 SEO_API void SEO_CALL SEO_SetSpriteDelay(int32_t frames);
 SEO_API int32_t SEO_CALL SEO_GetSpriteDelay(void);
 
+// Page (API 3). The overlay ships no page of its own: a script picks it (usually a CDN URL). url: full URL
+// (https://, file://, about:blank), "" = about:blank, anything else = file path relative to <game>/StreamEmber.
+// Returns 1 when a navigation was started/queued, 0 when the page is already that URL (and reloadIfSame == 0).
+// Safe before the browser exists: it is then created with this URL.
+SEO_API int32_t SEO_CALL SEO_LoadUrl(const char* utf8Url, int32_t reloadIfSame);
+// Copies the current page URL (normalized); same return convention as SEO_PollFromUi.
+SEO_API int32_t SEO_CALL SEO_GetUrl(char* buffer, int32_t bufferSize);
+
 // Function pointer types for backends that load the core with LoadLibrary
 typedef int32_t(SEO_CALL* SEO_GetApiVersion_t)(void);
 typedef int32_t(SEO_CALL* SEO_Initialize_t)(const SEO_InitParams*);
@@ -181,6 +189,8 @@ typedef void(SEO_CALL* SEO_SubmitSprites_t)(const SEO_Sprite*, int32_t);
 typedef int32_t(SEO_CALL* SEO_GetSprites_t)(SEO_Sprite*, int32_t);
 typedef void(SEO_CALL* SEO_SetSpriteDelay_t)(int32_t);
 typedef int32_t(SEO_CALL* SEO_GetSpriteDelay_t)(void);
+typedef int32_t(SEO_CALL* SEO_LoadUrl_t)(const char*, int32_t);
+typedef int32_t(SEO_CALL* SEO_GetUrl_t)(char*, int32_t);
 
 #ifdef __cplusplus
 }  // extern "C"

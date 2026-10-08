@@ -1,19 +1,8 @@
 # RDR2 (DirectX 12) backend. Needs no ScriptHookRDR2 SDK: it hooks DXGI/D3D12 itself with MinHook.
 set(TARGET StreamEmber.Overlay.RDR2)
 
-# MinHook (BSD-2): pinned commit = tag v1.3.4. Offline: -DMINHOOK_DIR=<a MinHook checkout>.
-set(MINHOOK_DIR "" CACHE PATH "Local MinHook source tree (empty = fetch the pinned version)")
-if(NOT MINHOOK_DIR)
-  include(FetchContent)
-  FetchContent_Declare(minhook
-    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537  # v1.3.4
-    GIT_SHALLOW FALSE
-    SOURCE_SUBDIR do-not-add-subdirectory  # we only compile its sources; MinHook's own CMake is not used
-  )
-  FetchContent_MakeAvailable(minhook)
-  set(MINHOOK_DIR "${minhook_SOURCE_DIR}")
-endif()
+# MinHook (BSD-2) 1.3.4, kept in vendor/minhook (no download)
+set(MINHOOK_DIR "${CMAKE_SOURCE_DIR}/vendor/minhook" CACHE PATH "MinHook source tree (include/, src/)")
 if(NOT EXISTS "${MINHOOK_DIR}/include/MinHook.h")
   message(FATAL_ERROR "MinHook not found in ${MINHOOK_DIR}")
 endif()

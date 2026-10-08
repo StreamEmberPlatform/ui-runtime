@@ -2,28 +2,27 @@
 <#
 .SYNOPSIS
     StreamEmber Overlay (ui-runtime): build, package and (optionally) install, for GTA V and RDR2.
+    The overlay is an engine only: it ships no page, trainer or UI kit. Scripts load their page (usually from a CDN)
+    with OverlayBridge.LoadUrl.
 
 .DESCRIPTION
     1. Version: VERSION (major.minor) + commits since it changed = patch (tools/StreamEmber.Build.psm1).
     2. CEF (minimal distribution) into third_party\cef, pinned by cef.lock (SHA-1 checked). -UpdateCef moves to the
        newest stable build in the supported range and rewrites cef.lock.
-    3. MHud (the UI kit, StreamEmberPlatform/mhud), pinned by mhud.lock. Source, in order: -MHudPath, MHUD_PATH,
-       the sibling checkout ..\mhud (CI checks the pinned commit out and passes -MHudPath).
-    4. C++ (CMake + Visual Studio): core, CEF host, GTA V and RDR2 backends, with version resources.
-    5. C#: StreamEmber.Overlay.Bridge + StreamEmber.Trainer.<GAME>, compiled against StreamEmber.Scripting.<GAME>.dll.
-       Source, in order: -ScriptingDir, the sibling runtime builds ..\gtav-runtime-scripthook\bin\Release and
-       ..\rdr2-runtime-scripthook\bin\Release (CI downloads the latest runtime releases and passes -ScriptingDir).
-    6. dist\<GAME>\ = the game-folder layout, then artifacts\StreamEmber.Overlay.<GAME>-<version>.zip (+ .sha256):
+    3. C++ (CMake + Visual Studio): core, CEF host, GTA V and RDR2 backends, with version resources. The ScriptHookV
+       SDK subset and MinHook are in vendor\.
+    4. C#: StreamEmber.Overlay.Bridge (game independent; scripts reference it).
+    5. dist\<GAME>\ = the game-folder layout, then artifacts\StreamEmber.Overlay.<GAME>-<version>.zip (+ .sha256):
          StreamEmber.Overlay.<GAME>.asi
-         StreamEmber\Overlay\            core, CEF host and CEF files, ui\ (test page, trainer, MHud)
-         StreamEmber\Scripts\            StreamEmber.Overlay.Bridge.dll, StreamEmber.Trainer.<GAME>.dll
+         StreamEmber\Overlay\            core, CEF host and CEF files
+         StreamEmber\Scripts\            StreamEmber.Overlay.Bridge.dll
          StreamEmber\Config\Overlay.ini
          StreamEmber\Licenses\StreamEmber.Overlay.<GAME>\
          StreamEmber\Manifests\StreamEmber.Overlay.<GAME>.json
-    7. -Deploy: copies dist\<GAME> into the game folder (keeps Overlay.ini, disables files of the old layout).
+    6. -Deploy: copies dist\<GAME> into the game folder (keeps Overlay.ini, disables files of the old layout).
 
     Needs: Visual Studio 2022+ ("Desktop development with C++"), CMake 3.21+ (the one in Visual Studio works),
-    .NET SDK. Internet: cef-builds.spotifycdn.com, github.com (MinHook).
+    .NET SDK. Internet: cef-builds.spotifycdn.com (CEF, pinned by cef.lock and SHA-1 checked).
 
 .EXAMPLE
     .\build.ps1
@@ -41,10 +40,6 @@ param(
     # Packages to build. -Deploy needs a single game.
     [ValidateSet('All', 'GTAV', 'RDR2')]
     [string]$Game = 'All',
-    # MHud checkout (repository root)
-    [string]$MHudPath = '',
-    # Folder with StreamEmber.Scripting.GTAV.dll / StreamEmber.Scripting.RDR2.dll (trainer compile references)
-    [string]$ScriptingDir = '',
     [switch]$UpdateCef,
     [switch]$Deploy,
     # Game folder (GTA5.exe / RDR2.exe). Default: GTAV_GAME_PATH / RDR2_GAME_PATH environment variable
@@ -58,14 +53,12 @@ $ProgressPreference = 'SilentlyContinue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $Root = $PSScriptRoot
-$Platform = Split-Path $Root -Parent   # StreamEmberPlatform\ (sibling repositories)
 Import-Module (Join-Path $Root 'tools\StreamEmber.Build.psm1') -Force
 
 $ThirdParty = Join-Path $Root 'third_party'
 $CefDir = Join-Path $ThirdParty 'cef'
 $CefMarker = Join-Path $CefDir '.streamember-cef-version'
 $CefLock = Join-Path $Root 'cef.lock'
-$MHudLock = Join-Path $Root 'mhud.lock'
 $BuildDir = Join-Path $Root 'build'
 $DistDir = Join-Path $Root 'dist'
 $ArtifactsDir = Join-Path $Root 'artifacts'
@@ -78,19 +71,15 @@ $CefMajorMax = 156
 $Games = [ordered]@{
     GTAV = @{
         Name = 'StreamEmber Overlay (GTA V)'; Exe = 'GTA5.exe'; Process = 'GTA5'; Env = 'GTAV_GAME_PATH'
-        RuntimeRepo = 'gtav-runtime-scripthook'
-        Project = 'trainers\gtav\StreamEmber.Trainer.GTAV.csproj'
         # Files of the old layout (OverlayRuntime builds before the StreamEmber layout)
         Conflicts = @('scripts/StreamEmber.Overlay.Bridge.dll', 'scripts/StreamEmber.TrainerDemo.dll',
-                      'scripts/OverlayDemo.3.cs', 'StreamEmber/Overlay/overlay.ini')
+                      'scripts/OverlayDemo.3.cs', 'StreamEmber/Overlay/overlay.ini', 'StreamEmber/Overlay/ui')
         Requires = @([ordered]@{ file = 'ScriptHookV.dll'; name = 'Script Hook V (Alexander Blade)'; url = 'http://www.dev-c.com/gtav/scripthookv/' })
     }
     RDR2 = @{
         Name = 'StreamEmber Overlay (RDR2)'; Exe = 'RDR2.exe'; Process = 'RDR2'; Env = 'RDR2_GAME_PATH'
-        RuntimeRepo = 'rdr2-runtime-scripthook'
-        Project = 'trainers\rdr2\StreamEmber.Trainer.RDR2.csproj'
         Conflicts = @('scripts/StreamEmber.Overlay.Bridge.dll', 'scripts/StreamEmber.Rdr2TrainerDemo.dll',
-                      'StreamEmber/Overlay/overlay.ini')
+                      'StreamEmber/Overlay/overlay.ini', 'StreamEmber/Overlay/ui')
         Requires = @([ordered]@{ file = 'ScriptHookRDR2.dll'; name = 'Script Hook RDR2 (Alexander Blade)'; url = 'http://www.dev-c.com/rdr2/scripthookrdr2/' },
                      [ordered]@{ file = 'dinput8.dll'; name = 'ASI Loader (Script Hook RDR2 package)'; url = 'http://www.dev-c.com/rdr2/scripthookrdr2/' })
     }
@@ -101,14 +90,6 @@ if ($Deploy -and $Game -eq 'All') { throw '-Deploy needs a single game: -Game GT
 
 function Write-Title([string]$Text) { Write-Host ''; Write-Host $Text -ForegroundColor Cyan }
 function Write-Ok([string]$Text) { Write-Host "  [OK] $Text" -ForegroundColor Green }
-
-function Get-GitCommit([string]$Path) {
-    $git = Get-Command git -ErrorAction SilentlyContinue
-    if (-not $git) { return $null }
-    $out = & $git.Source -C $Path rev-parse HEAD 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }
-    return ($out | Out-String).Trim()
-}
 
 # --- CEF --------------------------------------------------------------------------------------------------------
 function Get-CefVersionKey([string]$CefVersion) {
@@ -190,43 +171,6 @@ function Install-Cef {
     return $lock
 }
 
-# --- MHud -------------------------------------------------------------------------------------------------------
-function Resolve-MHud {
-    Write-Title 'MHud'
-    $lock = Get-Content $MHudLock -Raw | ConvertFrom-Json
-    $path = if ($MHudPath) { $MHudPath } elseif ($env:MHUD_PATH) { $env:MHUD_PATH } else { Join-Path $Platform 'mhud' }
-    if (-not (Test-Path (Join-Path $path 'integration\mhud\html\index.html'))) {
-        throw "MHud not found in $path. Clone https://github.com/$($lock.repository) next to ui-runtime or pass -MHudPath."
-    }
-    $path = (Resolve-Path $path).Path
-    $commit = Get-GitCommit $path
-    if ($commit -and $commit -ne $lock.commit) {
-        Write-Warning "MHud in $path is at $commit; mhud.lock pins $($lock.ref) ($($lock.commit)). CI builds the pinned commit."
-    }
-    $version = (Get-Content (Join-Path $path 'package.json') -Raw | ConvertFrom-Json).version
-    Write-Ok "MHud $version ($path)"
-    return [pscustomobject]@{ Path = $path; Version = $version; Commit = $commit }
-}
-
-# MHud's FiveM page (integration/mhud/html) + kit, unchanged; trainer.html = that page + trainer.css/trainer.js
-function Copy-MHudUi($MHud, [string]$UiDir) {
-    $page = Join-Path $MHud.Path 'integration\mhud\html'
-    $target = Join-Path $UiDir 'mhud'
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    Copy-Item (Join-Path $MHud.Path 'kit') $target -Recurse -Force
-    foreach ($f in 'index.html', 'app.js', 'app.css') { Copy-Item (Join-Path $page $f) $target -Force }
-
-    $html = [IO.File]::ReadAllText((Join-Path $page 'index.html'), [Text.Encoding]::UTF8)
-    $headAnchor = '</head>'
-    $appAnchor = '<script src="app.js"></script>'
-    if (-not $html.Contains($headAnchor) -or -not $html.Contains($appAnchor)) {
-        throw "MHud index.html changed ('$headAnchor' / '$appAnchor' missing); cannot generate trainer.html."
-    }
-    $html = $html.Replace($headAnchor, "<link rel=`"stylesheet`" href=`"../trainer/trainer.css`">`n$headAnchor")
-    $html = $html.Replace($appAnchor, "<script src=`"../trainer/trainer.js`"></script>`n$appAnchor")
-    [IO.File]::WriteAllText((Join-Path $target 'trainer.html'), $html, (New-Object Text.UTF8Encoding($false)))
-}
-
 # --- C++ --------------------------------------------------------------------------------------------------------
 function Find-CMake {
     $cmd = Get-Command cmake.exe -ErrorAction SilentlyContinue
@@ -258,32 +202,21 @@ function Build-Native {
 }
 
 # --- C# ---------------------------------------------------------------------------------------------------------
-function Find-Scripting([string]$Name) {
-    $file = "StreamEmber.Scripting.$Name.dll"
-    $candidates = @()
-    if ($ScriptingDir) { $candidates += Join-Path $ScriptingDir $file }
-    $candidates += Join-Path $Platform "$($Games[$Name].RuntimeRepo)\bin\Release\$file"
-    foreach ($c in $candidates) { if (Test-Path $c) { return (Resolve-Path $c).Path } }
-    throw "$file not found (looked in: $($candidates -join '; ')). Build $($Games[$Name].RuntimeRepo) or pass -ScriptingDir."
-}
-
-# Builds bridge + trainer; returns the output folder and the runtime version the trainer was compiled against
-function Build-Managed([string]$Name) {
+function Build-Bridge {
+    Write-Title 'C# (StreamEmber.Overlay.Bridge)'
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     if (-not $dotnet) { throw '.NET SDK not found (dotnet).' }
-    $scripting = Find-Scripting $Name
-    $runtimeVersion = (Get-Item $scripting).VersionInfo.ProductVersion
-    $out = Join-Path $BuildDir "managed\$Name"
+    $out = Join-Path $BuildDir 'managed'
     if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-    & $dotnet.Source build (Join-Path $Root $Games[$Name].Project) -c $Configuration -o $out --nologo -v minimal `
-        "-p:SE_VERSION=$Version" "-p:ScriptingReference=$scripting" | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "$Name trainer build failed ($LASTEXITCODE)." }
-    Write-Ok "$Name trainer (against $(Split-Path $scripting -Leaf) $runtimeVersion)"
-    return [pscustomobject]@{ Dir = $out; RuntimeVersion = $runtimeVersion }
+    & $dotnet.Source build (Join-Path $Root 'bridge\StreamEmber.Overlay.Bridge\StreamEmber.Overlay.Bridge.csproj') `
+        -c $Configuration -o $out --nologo -v minimal "-p:SE_VERSION=$Version" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Bridge build failed ($LASTEXITCODE)." }
+    Write-Ok 'StreamEmber.Overlay.Bridge.dll'
+    return $out
 }
 
 # --- Package ----------------------------------------------------------------------------------------------------
-function New-GamePackage([string]$Name, $Managed, $MHud) {
+function New-GamePackage([string]$Name, [string]$ManagedDir) {
     $info = $Games[$Name]
     $id = "StreamEmber.Overlay.$Name"
     $stage = Join-Path $DistDir $Name
@@ -301,27 +234,18 @@ function New-GamePackage([string]$Name, $Managed, $MHud) {
     Get-ChildItem (Join-Path $CefDir 'Release') -File | Where-Object { $_.Extension -in '.dll', '.bin', '.json' } |
         ForEach-Object { Copy-Item $_.FullName $overlayDir }
     Copy-Item (Join-Path $CefDir 'Resources\*') $overlayDir -Recurse -Force
-    Copy-Item (Join-Path $Root 'ui') $overlayDir -Recurse
-    Copy-MHudUi $MHud (Join-Path $overlayDir 'ui')
 
-    Copy-Item (Join-Path $Managed.Dir 'StreamEmber.Overlay.Bridge.dll') $scriptsDir
-    Copy-Item (Join-Path $Managed.Dir "StreamEmber.Trainer.$Name.dll") $scriptsDir
+    Copy-Item (Join-Path $ManagedDir 'StreamEmber.Overlay.Bridge.dll') $scriptsDir
     Copy-Item (Join-Path $Root 'package\Config\Overlay.ini') $configDir
 
     Copy-Item (Join-Path $Root 'THIRD-PARTY-NOTICES.md') (Join-Path $licenseDir 'THIRD-PARTY-NOTICES.txt')
     Copy-Item (Join-Path $CefDir 'LICENSE.txt') (Join-Path $licenseDir 'CEF.LICENSE.txt')
-    Copy-Item (Join-Path $MHud.Path 'LICENSE') (Join-Path $licenseDir 'MHud.LICENSE.txt')
     if ($Name -eq 'RDR2') {
-        $minhook = Get-ChildItem (Join-Path $BuildDir '_deps') -Recurse -File -Filter 'LICENSE.txt' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Directory.Name -eq 'minhook-src' } | Select-Object -First 1
-        if (-not $minhook) { throw 'MinHook LICENSE.txt not found under build\_deps\minhook-src.' }
-        Copy-Item $minhook.FullName (Join-Path $licenseDir 'MinHook.LICENSE.txt')
+        Copy-Item (Join-Path $Root 'vendor\minhook\LICENSE.txt') (Join-Path $licenseDir 'MinHook.LICENSE.txt')
     }
 
-    $depends = @([ordered]@{ id = "StreamEmber.Runtime.$Name"; builtAgainst = $Managed.RuntimeVersion })
     New-SEManifest -StageDirectory $stage -Id $id -Name $info.Name -Version $Version -Game $Name `
-        -Preserve $Preserve -Conflicts $info.Conflicts -Requires $info.Requires -Depends $depends `
-        -RepositoryRoot $Root | Out-Null
+        -Preserve $Preserve -Conflicts $info.Conflicts -Requires $info.Requires -RepositoryRoot $Root | Out-Null
     $zip = New-SEPackage -StageDirectory $stage -OutputDirectory $ArtifactsDir -Id $id -Version $Version
     Write-Ok ("{0} ({1:N0} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
     return $stage
@@ -348,9 +272,6 @@ function Install-ToGame([string]$Name, [string]$Stage) {
     foreach ($need in $info.Requires) {
         if (-not (Test-Path (Join-Path $gameDir $need.file))) { Write-Warning "$($need.file) missing in the game folder ($($need.name))." }
     }
-    if (-not (Test-Path (Join-Path $gameDir "StreamEmber.Runtime.$Name.asi"))) {
-        Write-Warning "StreamEmber.Runtime.$Name.asi missing: the trainer needs StreamEmber Runtime ($($info.RuntimeRepo))."
-    }
     Write-Ok "Installed into $gameDir (logs: StreamEmber\Logs\Overlay*.log)"
 }
 
@@ -359,17 +280,13 @@ if (-not $Version) { $Version = Get-SEVersion -RepositoryRoot $Root -Kind Dev }
 Write-Host "StreamEmber Overlay $Version ($($Selected -join ', '))" -ForegroundColor Cyan
 
 $cef = Install-Cef
-$mhud = Resolve-MHud
 Build-Native
-
-Write-Title 'C# (bridge + trainers)'
-$managed = @{}
-foreach ($name in $Selected) { $managed[$name] = Build-Managed $name }
+$managed = Build-Bridge
 
 Write-Title 'Packages'
 $stages = @{}
-foreach ($name in $Selected) { $stages[$name] = New-GamePackage $name $managed[$name] $mhud }
+foreach ($name in $Selected) { $stages[$name] = New-GamePackage $name $managed }
 
 if ($Deploy) { Install-ToGame $Game $stages[$Game] }
 Write-Host ''
-Write-Ok "StreamEmber Overlay $Version (CEF $($cef.version), MHud $($mhud.Version), $Configuration)"
+Write-Ok "StreamEmber Overlay $Version (CEF $($cef.version), $Configuration)"

@@ -19,7 +19,7 @@ struct Config {
   int frameRate = 60;
   int keyToggleVisible = VK_F7;    // 0 = disabled
   int keyToggleInput = VK_F8;      // 0 = disabled
-  std::string startUrl;            // empty = ui/index.html
+  std::string startUrl;            // empty = about:blank until a script calls SEO_LoadUrl
 };
 
 // Function table of StreamEmber.Overlay.dll (loaded at runtime)
