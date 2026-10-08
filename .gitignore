@@ -1,0 +1,13 @@
+# CEF binary distribution (downloaded by build.ps1)
+/third_party/
+
+# Build outputs
+/build/
+/dist/
+bin/
+obj/
+
+# IDE
+.vs/
+*.user
+.vscode/

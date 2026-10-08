@@ -1,0 +1,265 @@
+﻿#Requires -Version 5.1
+<#
+.SYNOPSIS
+    StreamEmber OverlayRuntime: CEF'i indirir, C++ projelerini ve C# köprüsünü derler, dist\ altında paketler,
+    istenirse GTA V klasörüne kurar.
+
+.DESCRIPTION
+    1. CEF (minimal dağıtım) third_party\cef altına indirilir. Sürüm cef.lock dosyasına yazılır; sonraki
+       derlemeler aynı sürümü kullanır. Yeni sürüme geçmek için: -UpdateCef
+    2. CMake ile Visual Studio projesi oluşturulur (build\) ve derlenir.
+    3. dist\ klasörü oyun klasörü düzeninde hazırlanır:
+         dist\StreamEmber.Overlay.GTAV.asi
+         dist\StreamEmber\Overlay\   (çekirdek DLL, host exe, CEF dosyaları, ui\, overlay.ini)
+         dist\scripts\               (StreamEmber.Overlay.Bridge.dll, OverlayDemo.3.cs)
+    4. -Deploy verilirse dist\ oyun klasörüne kopyalanır (mevcut overlay.ini korunur).
+
+    Ön koşullar: Visual Studio 2022+ ("Desktop development with C++"), CMake 3.21+ (VS ile gelen de olur),
+    .NET SDK (köprü için). İnternet: cef-builds.spotifycdn.com
+
+.PARAMETER Configuration
+    Release (varsayılan) ya da Debug.
+.PARAMETER Deploy
+    dist\ içeriğini oyun klasörüne kopyalar. Oyun kapalı olmalı.
+.PARAMETER GamePath
+    GTA V klasörü (GTA5.exe'nin olduğu yer). Verilmezse GTAV_GAME_PATH, o da yoksa GTAV_SCRIPT_PATH'in üst klasörü.
+.PARAMETER UpdateCef
+    cef.lock'u yok sayar, desteklenen aralıktaki en yeni stable CEF'e geçer.
+.PARAMETER SkipBridge
+    C# köprüsünü derlemez.
+
+.EXAMPLE
+    .\build.ps1
+.EXAMPLE
+    .\build.ps1 -Deploy
+.EXAMPLE
+    .\build.ps1 -Deploy -GamePath "D:\EpicGames\GTAV"
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet('Release', 'Debug')]
+    [string]$Configuration = 'Release',
+    [switch]$Deploy,
+    [string]$GamePath,
+    [switch]$UpdateCef,
+    [switch]$SkipBridge
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+$Root = $PSScriptRoot
+$ThirdParty = Join-Path $Root 'third_party'
+$CefDir = Join-Path $ThirdParty 'cef'
+$CefMarker = Join-Path $CefDir '.streamember-cef-version'
+$LockFile = Join-Path $Root 'cef.lock'
+$BuildDir = Join-Path $Root 'build'
+$DistDir = Join-Path $Root 'dist'
+$CefIndexUrl = 'https://cef-builds.spotifycdn.com/index.json'
+$CefCdn = 'https://cef-builds.spotifycdn.com/'
+# Kodun derlenerek kontrol edildiği CEF ana sürüm aralığı (Chromium ana sürümüyle aynı)
+$CefMajorMin = 152
+$CefMajorMax = 156
+
+function Write-Title([string]$Text) { Write-Host ''; Write-Host $Text -ForegroundColor Cyan }
+function Write-Ok([string]$Text) { Write-Host "  [OK] $Text" -ForegroundColor Green }
+function Write-Warn([string]$Text) { Write-Host "  [!]  $Text" -ForegroundColor Yellow }
+
+function Get-CefVersionKey([string]$CefVersion) {
+    # "154.0.7+gabc1234+chromium-154.0.8037.98" -> [version]154.0.7
+    $core = $CefVersion.Split('+')[0]
+    try { return [version]$core } catch { return [version]'0.0' }
+}
+
+function Resolve-CefBuild {
+    Write-Host "  CEF listesi okunuyor: $CefIndexUrl"
+    $index = Invoke-RestMethod -Uri $CefIndexUrl -UseBasicParsing
+    $candidates = @($index.windows64.versions | Where-Object {
+        $major = (Get-CefVersionKey $_.cef_version).Major
+        $_.channel -eq 'stable' -and $major -ge $CefMajorMin -and $major -le $CefMajorMax
+    } | Sort-Object -Property @{ Expression = { Get-CefVersionKey $_.cef_version } } -Descending)
+    if ($candidates.Count -eq 0) {
+        $available = ($index.windows64.versions | Where-Object { $_.channel -eq 'stable' } |
+            Select-Object -First 5 | ForEach-Object { $_.cef_version }) -join ', '
+        throw "Desteklenen aralıkta ($CefMajorMin-$CefMajorMax) stable CEF yok. Mevcut stable: $available"
+    }
+    $pick = $candidates[0]
+    $file = @($pick.files | Where-Object { $_.type -eq 'minimal' })[0]
+    if (-not $file) { throw "CEF $($pick.cef_version) için minimal dağıtım bulunamadı." }
+    return [pscustomobject]@{ version = $pick.cef_version; chromium = $pick.chromium_version; name = $file.name; sha1 = $file.sha1 }
+}
+
+function Expand-TarBz2([string]$Archive, [string]$Destination) {
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+        & $tar.Source -xjf $Archive -C $Destination | Out-Host
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Warn "tar.exe arşivi açamadı, 7-Zip deneniyor."
+    }
+    $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    if (-not $sevenZip) {
+        $candidate = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+        if (Test-Path $candidate) { $sevenZip = Get-Item $candidate }
+    }
+    if (-not $sevenZip) { throw 'tar.bz2 açılamadı: Windows tar.exe ya da 7-Zip gerekli.' }
+    $path7z = if ($sevenZip.Source) { $sevenZip.Source } else { $sevenZip.FullName }
+    & $path7z x $Archive "-o$Destination" -y | Out-Null
+    $inner = Join-Path $Destination ([IO.Path]::GetFileNameWithoutExtension($Archive))
+    & $path7z x $inner "-o$Destination" -y | Out-Null
+    Remove-Item $inner -Force
+}
+
+function Install-Cef {
+    Write-Title '1/4  CEF'
+    $lock = $null
+    if ((Test-Path $LockFile) -and -not $UpdateCef) {
+        $lock = Get-Content $LockFile -Raw | ConvertFrom-Json
+    } else {
+        $lock = Resolve-CefBuild
+        $lock | ConvertTo-Json | Set-Content -Path $LockFile -Encoding UTF8
+        Write-Ok "cef.lock yazıldı: $($lock.version)"
+    }
+
+    if ((Test-Path $CefMarker) -and ((Get-Content $CefMarker -Raw).Trim() -eq $lock.version)) {
+        Write-Ok "CEF hazır: $($lock.version)"
+        return $lock
+    }
+
+    New-Item -ItemType Directory -Force -Path $ThirdParty | Out-Null
+    $archive = Join-Path $ThirdParty $lock.name
+    if (-not (Test-Path $archive)) {
+        Write-Host "  İndiriliyor: $($lock.name)"
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curl) {
+            & $curl.Source -L --fail -o $archive ($CefCdn + $lock.name) | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "CEF indirilemedi (curl $LASTEXITCODE)." }
+        } else {
+            Invoke-WebRequest -Uri ($CefCdn + $lock.name) -OutFile $archive -UseBasicParsing
+        }
+    }
+    $hash = (Get-FileHash -Path $archive -Algorithm SHA1).Hash.ToLowerInvariant()
+    if ($hash -ne $lock.sha1.ToLowerInvariant()) {
+        Remove-Item $archive -Force
+        throw "CEF arşivinin SHA1 değeri tutmuyor (beklenen $($lock.sha1), gelen $hash). Tekrar deneyin."
+    }
+
+    Write-Host '  Açılıyor...'
+    if (Test-Path $CefDir) { Remove-Item $CefDir -Recurse -Force }
+    Expand-TarBz2 $archive $ThirdParty
+    $extracted = Join-Path $ThirdParty ($lock.name -replace '\.tar\.bz2$', '')
+    if (-not (Test-Path $extracted)) { throw "Beklenen klasör yok: $extracted" }
+    Rename-Item $extracted $CefDir
+    Set-Content -Path $CefMarker -Value $lock.version -Encoding ASCII
+    Remove-Item $archive -Force
+    Write-Ok "CEF kuruldu: $($lock.version) (Chromium $($lock.chromium))"
+    return $lock
+}
+
+function Find-CMake {
+    $cmd = Get-Command cmake.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $vs = & $vswhere -latest -prerelease -products * -property installationPath
+        $candidate = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+        if (Test-Path $candidate) { return $candidate }
+    }
+    throw 'cmake.exe bulunamadı. Visual Studio "C++ CMake tools" bileşenini ya da CMake 3.21+ kurun.'
+}
+
+function Find-Output([string]$Name) {
+    $file = Get-ChildItem -Path $BuildDir -Recurse -File -Filter $Name |
+        Where-Object { $_.DirectoryName -match "\\$Configuration$" } | Select-Object -First 1
+    if (-not $file) { throw "Derleme çıktısı bulunamadı: $Name" }
+    return $file.FullName
+}
+
+function Build-Native {
+    Write-Title '2/4  C++ (CMake + Visual Studio)'
+    $cmake = Find-CMake
+    & $cmake -S $Root -B $BuildDir -A x64 "-DCEF_ROOT=$CefDir" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "CMake yapılandırması başarısız ($LASTEXITCODE)." }
+    & $cmake --build $BuildDir --config $Configuration --parallel | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Derleme başarısız ($LASTEXITCODE)." }
+    Write-Ok 'C++ projeleri derlendi.'
+}
+
+function Build-Bridge {
+    Write-Title '3/4  C# köprüsü'
+    if ($SkipBridge) { Write-Warn 'Atlandı (-SkipBridge).'; return $null }
+    $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+    if (-not $dotnet) { Write-Warn '.NET SDK yok; köprü atlandı.'; return $null }
+    $project = Join-Path $Root 'bridge\StreamEmber.Overlay.Bridge\StreamEmber.Overlay.Bridge.csproj'
+    $out = Join-Path $BuildDir 'bridge'
+    & $dotnet.Source build $project -c $Configuration -o $out --nologo -v minimal | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Köprü derlenemedi ($LASTEXITCODE)." }
+    Write-Ok 'StreamEmber.Overlay.Bridge.dll derlendi.'
+    return (Join-Path $out 'StreamEmber.Overlay.Bridge.dll')
+}
+
+function New-Dist([string]$BridgeDll) {
+    Write-Title '4/4  dist\'
+    if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
+    $overlayDir = Join-Path $DistDir 'StreamEmber\Overlay'
+    $scriptsDir = Join-Path $DistDir 'scripts'
+    New-Item -ItemType Directory -Force -Path $overlayDir, $scriptsDir | Out-Null
+
+    Copy-Item (Find-Output 'StreamEmber.Overlay.GTAV.asi') $DistDir
+    Copy-Item (Find-Output 'StreamEmber.Overlay.dll') $overlayDir
+    Copy-Item (Find-Output 'StreamEmber.Overlay.Host.exe') $overlayDir
+
+    # CEF çalışma dosyaları: Release\ (dll, bin, json) + Resources\ (pak, icudtl.dat, locales\)
+    $cefBin = Join-Path $CefDir 'Release'
+    Get-ChildItem $cefBin -File | Where-Object { $_.Extension -in '.dll', '.bin', '.json' } |
+        ForEach-Object { Copy-Item $_.FullName $overlayDir }
+    Copy-Item (Join-Path $CefDir 'Resources\*') $overlayDir -Recurse -Force
+
+    Copy-Item (Join-Path $Root 'ui') $overlayDir -Recurse
+    Copy-Item (Join-Path $Root 'overlay.ini') $overlayDir
+
+    if ($BridgeDll -and (Test-Path $BridgeDll)) { Copy-Item $BridgeDll $scriptsDir }
+    Copy-Item (Join-Path $Root 'samples\gtav\OverlayDemo.3.cs') $scriptsDir
+
+    $size = (Get-ChildItem $DistDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
+    Write-Ok ("dist\ hazır ({0:N0} MB)" -f $size)
+}
+
+function Resolve-GamePath {
+    if ($GamePath) { return $GamePath }
+    if ($env:GTAV_GAME_PATH) { return $env:GTAV_GAME_PATH }
+    if ($env:GTAV_SCRIPT_PATH) { return (Split-Path $env:GTAV_SCRIPT_PATH -Parent) }
+    throw 'Oyun klasörü bilinmiyor: -GamePath verin ya da GTAV_GAME_PATH ortam değişkenini ayarlayın.'
+}
+
+function Install-ToGame {
+    Write-Title 'Kurulum'
+    $game = Resolve-GamePath
+    if (-not (Test-Path (Join-Path $game 'GTA5.exe'))) { throw "GTA5.exe bulunamadı: $game" }
+    if (Get-Process -Name 'GTA5' -ErrorAction SilentlyContinue) { throw 'GTA V açık; dosyalar kilitli. Oyunu kapatın.' }
+
+    Copy-Item (Join-Path $DistDir 'StreamEmber.Overlay.GTAV.asi') $game -Force
+    $target = Join-Path $game 'StreamEmber\Overlay'
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    $source = Join-Path $DistDir 'StreamEmber\Overlay'
+    Get-ChildItem $source | ForEach-Object {
+        if ($_.Name -eq 'overlay.ini' -and (Test-Path (Join-Path $target 'overlay.ini'))) {
+            Write-Warn 'overlay.ini zaten var; korunuyor.'
+        } else {
+            Copy-Item $_.FullName $target -Recurse -Force
+        }
+    }
+    $scripts = Join-Path $game 'scripts'
+    New-Item -ItemType Directory -Force -Path $scripts | Out-Null
+    Copy-Item (Join-Path $DistDir 'scripts\*') $scripts -Force
+    Write-Ok "Kuruldu: $game"
+    Write-Host '  Loglar: StreamEmber\Overlay\logs\ (gtav-backend.log, overlay.log, cef.log)'
+}
+
+$lock = Install-Cef
+Build-Native
+$bridge = Build-Bridge
+New-Dist $bridge
+if ($Deploy) { Install-ToGame }
+Write-Host ''
+Write-Ok "Bitti. CEF $($lock.version), $Configuration."

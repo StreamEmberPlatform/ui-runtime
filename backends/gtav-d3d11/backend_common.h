@@ -1,0 +1,68 @@
+// StreamEmber Overlay — GTA V (D3D11) backend: shared declarations.
+#pragma once
+
+#include <windows.h>
+
+#include <atomic>
+#include <string>
+
+#include "se_overlay.h"
+
+namespace seo_gtav {
+
+struct Config {
+  bool enabled = true;
+  bool testPattern = false;        // phase 1: draw a generated pattern without loading CEF
+  bool drawCursor = true;          // draw our own cursor while the UI has input
+  bool blockRawInputInUiMode = true;
+  int frameRate = 60;
+  int keyToggleVisible = VK_F7;    // 0 = disabled
+  int keyToggleInput = VK_F8;      // 0 = disabled
+  std::string startUrl;            // empty = ui/index.html
+};
+
+// Function table of StreamEmber.Overlay.dll (loaded at runtime)
+struct CoreApi {
+  SEO_GetApiVersion_t GetApiVersion = nullptr;
+  SEO_Initialize_t Initialize = nullptr;
+  SEO_GetState_t GetState = nullptr;
+  SEO_Shutdown_t Shutdown = nullptr;
+  SEO_Resize_t Resize = nullptr;
+  SEO_AcquireFrame_t AcquireFrame = nullptr;
+  SEO_ReleaseFrame_t ReleaseFrame = nullptr;
+  SEO_SetVisible_t SetVisible = nullptr;
+  SEO_IsVisible_t IsVisible = nullptr;
+  SEO_SetInputMode_t SetInputMode = nullptr;
+  SEO_GetInputMode_t GetInputMode = nullptr;
+  SEO_SendMouseMove_t SendMouseMove = nullptr;
+  SEO_SendMouseButton_t SendMouseButton = nullptr;
+  SEO_SendMouseWheel_t SendMouseWheel = nullptr;
+  SEO_SendKey_t SendKey = nullptr;
+  SEO_SetFocus_t SetFocus = nullptr;
+  SEO_Log_t Log = nullptr;
+};
+
+// Backend globals (defined in backend.cpp)
+const Config& GetConfig();
+const std::wstring& GetBaseDir();
+// Non-null once the core DLL is loaded and SEO_Initialize was called
+const CoreApi* GetCore();
+
+// Overlay visibility / input mode. Use the core's state when it is loaded, a local flag otherwise (test pattern).
+bool IsOverlayVisible();
+void ToggleOverlayVisible();
+bool IsUiInputMode();
+void ToggleUiInputMode();
+
+void BLog(const char* level, const std::string& message);
+inline void BLogInfo(const std::string& m) { BLog("INFO", m); }
+inline void BLogError(const std::string& m) { BLog("ERROR", m); }
+
+// Back buffer size in pixels (written by the renderer, read by input mapping)
+extern std::atomic<int> g_backBufferWidth;
+extern std::atomic<int> g_backBufferHeight;
+// Last known cursor position in back buffer pixels (-1 = unknown)
+extern std::atomic<int> g_cursorX;
+extern std::atomic<int> g_cursorY;
+
+}  // namespace seo_gtav
