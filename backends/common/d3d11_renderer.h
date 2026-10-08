@@ -62,12 +62,19 @@ class Renderer {
 
   ID3D11ShaderResourceView* testSrv_ = nullptr;
   ID3D11ShaderResourceView* cursorSrv_ = nullptr;
+  // "StreamEmber" badge (rendered once with GDI at 2x) and the status dot in front of it
+  ID3D11ShaderResourceView* badgeSrv_ = nullptr;
+  ID3D11ShaderResourceView* dotSrv_[3] = {nullptr, nullptr, nullptr};  // starting, ready, failed
+  int badgeWidth_ = 0;
+  int badgeHeight_ = 0;
 
   int width_ = 0;
   int height_ = 0;
   bool drawUi_ = false;          // decided in BeginFrame, used by Draw
   bool drawTest_ = false;
   bool drawCursor_ = false;
+  bool drawBadge_ = false;
+  int badgeState_ = 0;           // index into dotSrv_
   bool failed_ = false;          // pipeline creation failed permanently for this device
 };
 

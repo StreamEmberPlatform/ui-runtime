@@ -4,6 +4,9 @@ Sürümler `VERSION` (major.minor) + commit sayısı (patch) ile otomatik verili
 Burada yalnız kayda değer değişiklikler tutulur.
 
 ## 1.0
+- Sol üstte küçük "StreamEmber" çalışıyor göstergesi + durum noktası (sarı/yeşil/kırmızı); `ShowBadge=0` kapatır.
+- Loglar her açılışta `<ad>.previous.log`'a döndürülür (önceki oturumun logu kaybolmaz).
+- Çizim oyunun arka tamponunun alfa kanalına artık yazmaz (yalnız renk).
 - Overlay yalnız motor: trainer'lar ayrı repolara (gtav-trainer-scripthook, rdr2-trainer-scripthook), MHud ve
   hazır sayfalar (`ui/`) çıkarıldı. Sayfayı scriptler seçer: `SEO_LoadUrl` / `OverlayBridge.LoadUrl` (API 3); boş
   `StartUrl` = hiçbir şey çizilmez.

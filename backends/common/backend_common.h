@@ -15,6 +15,7 @@ struct Config {
   bool enabled = true;
   bool testPattern = false;        // phase 1: draw a generated pattern without loading CEF
   bool drawCursor = true;          // draw our own cursor while the UI has input
+  bool showBadge = true;           // small "StreamEmber" label at the top left: the overlay is running
   bool blockRawInputInUiMode = true;
   int frameRate = 60;
   int keyToggleVisible = VK_F7;    // 0 = disabled

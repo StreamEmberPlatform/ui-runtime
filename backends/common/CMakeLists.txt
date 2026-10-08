@@ -15,4 +15,4 @@ set_target_properties(StreamEmber.Overlay.BackendCommon PROPERTIES
 target_compile_options(StreamEmber.Overlay.BackendCommon PRIVATE /W4 /utf-8 /wd4100)
 target_compile_definitions(StreamEmber.Overlay.BackendCommon PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_include_directories(StreamEmber.Overlay.BackendCommon PUBLIC ${SEO_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(StreamEmber.Overlay.BackendCommon PUBLIC d3d11 dxgi d3dcompiler)
+target_link_libraries(StreamEmber.Overlay.BackendCommon PUBLIC d3d11 dxgi d3dcompiler gdi32)

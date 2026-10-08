@@ -54,9 +54,14 @@ void OpenLog(const wchar_t* logName) {
   const std::wstring dir = g_rootDir + L"\\Logs";
   CreateDirectoryW(g_rootDir.c_str(), nullptr);
   CreateDirectoryW(dir.c_str(), nullptr);
-  // Truncated on every game start
-  g_logFile = CreateFileW((dir + L"\\" + logName).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                          CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  // New file on every game start; the previous session's log is kept as <name>.previous.log
+  const std::wstring path = dir + L"\\" + logName;
+  std::wstring previous = path;
+  const size_t dot = previous.find_last_of(L'.');
+  previous = (dot == std::wstring::npos ? previous : previous.substr(0, dot)) + L".previous.log";
+  MoveFileExW(path.c_str(), previous.c_str(), MOVEFILE_REPLACE_EXISTING);
+  g_logFile = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                          nullptr);
 }
 
 void ReadConfig() {
@@ -68,6 +73,7 @@ void ReadConfig() {
   g_config.testPattern = readInt(L"Overlay", L"TestPattern", 0) != 0;
   g_config.frameRate = readInt(L"Overlay", L"FrameRate", 60);
   g_config.drawCursor = readInt(L"Overlay", L"DrawCursor", 1) != 0;
+  g_config.showBadge = readInt(L"Overlay", L"ShowBadge", 1) != 0;
   g_config.blockRawInputInUiMode = readInt(L"Overlay", L"BlockRawInputInUiMode", 1) != 0;
   g_config.keyToggleVisible = readInt(L"Hotkeys", L"ToggleVisible", VK_F7);
   g_config.keyToggleInput = readInt(L"Hotkeys", L"ToggleInput", VK_F8);

@@ -3,6 +3,7 @@
 #include <d3dcompiler.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -240,6 +241,86 @@ std::vector<uint32_t> MakeCursor(int size) {
   return px;
 }
 
+// "StreamEmber" in white with a soft dark outline, premultiplied BGRA, rendered with GDI (grayscale antialiasing).
+// Rendered at twice the 1080p size and drawn scaled down, so it stays crisp from 720p to 4K.
+std::vector<uint32_t> MakeBadge(int& outWidth, int& outHeight) {
+  outWidth = outHeight = 0;
+  std::vector<uint32_t> result;
+  HDC dc = CreateCompatibleDC(nullptr);
+  if (dc == nullptr) return result;
+  HFONT font = CreateFontW(-26, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  HGDIOBJ oldFont = font != nullptr ? SelectObject(dc, font) : nullptr;
+  const wchar_t text[] = L"StreamEmber";
+  const int length = static_cast<int>(wcslen(text));
+  SIZE extent = {};
+  GetTextExtentPoint32W(dc, text, length, &extent);
+  const int pad = 4;
+  const int w = extent.cx + pad * 2;
+  const int h = extent.cy + pad * 2;
+  if (w > pad * 2 && h > pad * 2) {
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bitmap != nullptr && bits != nullptr) {
+      HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+      std::memset(bits, 0, static_cast<size_t>(w) * h * 4);
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, RGB(255, 255, 255));
+      TextOutW(dc, pad, pad, text, length);
+      GdiFlush();
+      const uint32_t* src = static_cast<const uint32_t*>(bits);
+      auto coverage = [&](int x, int y) -> float {
+        if (x < 0 || y < 0 || x >= w || y >= h) return 0.0f;
+        return static_cast<float>((src[static_cast<size_t>(y) * w + x] >> 8) & 0xFF) / 255.0f;  // green channel
+      };
+      result.resize(static_cast<size_t>(w) * h);
+      for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+          const float text = coverage(x, y);
+          float shadow = 0.0f;  // dilated coverage = outline
+          for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) shadow = std::max(shadow, coverage(x + dx, y + dy));
+          shadow *= 0.55f;
+          const float a = text + shadow * (1.0f - text);
+          const float c = text;  // white text over a black outline, premultiplied
+          const auto toByte = [](float v) { return static_cast<uint32_t>(std::min(255.0f, std::max(0.0f, v * 255.0f + 0.5f))); };
+          result[static_cast<size_t>(y) * w + x] = toByte(c) | (toByte(c) << 8) | (toByte(c) << 16) | (toByte(a) << 24);
+        }
+      }
+      outWidth = w;
+      outHeight = h;
+      SelectObject(dc, oldBitmap);
+    }
+    if (bitmap != nullptr) DeleteObject(bitmap);
+  }
+  if (oldFont != nullptr) SelectObject(dc, oldFont);
+  if (font != nullptr) DeleteObject(font);
+  DeleteDC(dc);
+  return result;
+}
+
+// Round status dot, premultiplied BGRA
+std::vector<uint32_t> MakeDot(int size, int r, int g, int b) {
+  std::vector<uint32_t> px(static_cast<size_t>(size) * size, 0);
+  const float c = (size - 1) * 0.5f;
+  const float radius = size * 0.5f - 1.0f;
+  for (int y = 0; y < size; ++y) {
+    for (int x = 0; x < size; ++x) {
+      const float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c));
+      const float a = std::min(1.0f, std::max(0.0f, radius - d + 0.5f));
+      px[static_cast<size_t>(y) * size + x] = PremultipliedBgra(r, g, b, static_cast<int>(a * 255.0f + 0.5f));
+    }
+  }
+  return px;
+}
+
 ID3D11ShaderResourceView* CreateStaticTexture(ID3D11Device* device, std::vector<uint32_t> pixels, int w, int h) {
   D3D11_TEXTURE2D_DESC desc = {};
   desc.Width = static_cast<UINT>(w);
@@ -376,7 +457,10 @@ bool Renderer::CreatePipeline() {
   bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
   bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
   bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-  bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+  // Colour only: the game's back buffer alpha is never touched (a swap chain or compositor that honours alpha
+  // would otherwise show the window see-through where the page is transparent).
+  bd.RenderTarget[0].RenderTargetWriteMask =
+      D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
   if (FAILED(hr = device_->CreateBlendState(&bd, &blend_))) {
     BLogError("CreateBlendState failed: " + Hex(hr));
     return false;
@@ -406,6 +490,17 @@ bool Renderer::CreatePipeline() {
 bool Renderer::CreateStaticTextures() {
   testSrv_ = CreateStaticTexture(device_, MakeTestPattern(512, 256), 512, 256);
   cursorSrv_ = CreateStaticTexture(device_, MakeCursor(32), 32, 32);
+  // The badge is optional: without it the overlay still works
+  int w = 0, h = 0;
+  std::vector<uint32_t> badge = MakeBadge(w, h);
+  if (!badge.empty()) {
+    badgeSrv_ = CreateStaticTexture(device_, badge, w, h);
+    badgeWidth_ = w;
+    badgeHeight_ = h;
+  }
+  dotSrv_[0] = CreateStaticTexture(device_, MakeDot(16, 255, 176, 32), 16, 16);  // starting: amber
+  dotSrv_[1] = CreateStaticTexture(device_, MakeDot(16, 64, 214, 96), 16, 16);   // ready: green
+  dotSrv_[2] = CreateStaticTexture(device_, MakeDot(16, 235, 64, 52), 16, 16);   // failed: red
   return testSrv_ != nullptr && cursorSrv_ != nullptr;
 }
 
@@ -507,7 +602,7 @@ void Renderer::DrawQuad(ID3D11ShaderResourceView* srv, bool swizzle, float left,
 }
 
 bool Renderer::BeginFrame(int width, int height) {
-  drawUi_ = drawTest_ = drawCursor_ = false;
+  drawUi_ = drawTest_ = drawCursor_ = drawBadge_ = false;
   if (device_ == nullptr || failed_ || width <= 0 || height <= 0) {
     return false;
   }
@@ -529,11 +624,16 @@ bool Renderer::BeginFrame(int width, int height) {
   drawUi_ = visible && core != nullptr && uiHasContent_;
   drawTest_ = visible && cfg.testPattern;
   drawCursor_ = visible && cfg.drawCursor && IsUiInputMode() && g_cursorX.load() >= 0 && g_cursorY.load() >= 0;
-  return drawUi_ || drawTest_ || drawCursor_;
+  drawBadge_ = visible && cfg.showBadge && badgeSrv_ != nullptr;
+  if (drawBadge_) {
+    const int state = core != nullptr ? core->GetState() : (cfg.testPattern ? SEO_STATE_READY : SEO_STATE_STARTING);
+    badgeState_ = state == SEO_STATE_READY ? 1 : state == SEO_STATE_FAILED ? 2 : 0;
+  }
+  return drawUi_ || drawTest_ || drawCursor_ || drawBadge_;
 }
 
 void Renderer::Draw(ID3D11RenderTargetView* rtv, bool preserveState) {
-  if (rtv == nullptr || context_ == nullptr || failed_ || !(drawUi_ || drawTest_ || drawCursor_)) {
+  if (rtv == nullptr || context_ == nullptr || failed_ || !(drawUi_ || drawTest_ || drawCursor_ || drawBadge_)) {
     return;
   }
   const CoreApi* core = GetCore();
@@ -585,6 +685,22 @@ void Renderer::Draw(ID3D11RenderTargetView* rtv, bool preserveState) {
     const float x = 48.0f * scale;
     const float y = 48.0f * scale;
     DrawQuad(testSrv_, false, x, y, x + 512.0f * scale, y + 256.0f * scale);
+  }
+  if (drawBadge_) {
+    // Top left, small: [dot] StreamEmber (dot: amber = starting, green = running, red = failed).
+    // s = screen pixels per 1080p pixel; the text texture is rendered at 2x the 1080p size.
+    const float s = static_cast<float>(height_) / 1080.0f;
+    const float x = 8.0f * s;
+    const float y = 6.0f * s;
+    const float dot = 9.0f * s;
+    const float textWidth = static_cast<float>(badgeWidth_) * 0.5f * s;
+    const float textHeight = static_cast<float>(badgeHeight_) * 0.5f * s;
+    if (dotSrv_[badgeState_] != nullptr) {
+      const float dy = y + (textHeight - dot) * 0.5f;
+      DrawQuad(dotSrv_[badgeState_], false, x, dy, x + dot, dy + dot, 0.0f, 0.0f, 1.0f, 1.0f, 0.85f);
+    }
+    const float tx = x + dot + 3.0f * s;
+    DrawQuad(badgeSrv_, false, tx, y, tx + textWidth, y + textHeight, 0.0f, 0.0f, 1.0f, 1.0f, 0.75f);
   }
   if (drawCursor_) {
     const float x = static_cast<float>(g_cursorX.load());
@@ -641,6 +757,9 @@ void Renderer::ReleaseAll() {
   SafeRelease(uiTexture_);
   SafeRelease(testSrv_);
   SafeRelease(cursorSrv_);
+  SafeRelease(badgeSrv_);
+  for (ID3D11ShaderResourceView*& dot : dotSrv_) SafeRelease(dot);
+  badgeWidth_ = badgeHeight_ = 0;
   SafeRelease(depth_);
   SafeRelease(raster_);
   SafeRelease(blend_);

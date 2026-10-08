@@ -133,11 +133,16 @@ void DiagOpen() {
   *slash = 0;
   const wchar_t* parts[] = {L"\\StreamEmber", L"\\Logs"};
   for (const wchar_t* part : parts) {
-    if (lstrlenW(dir) + lstrlenW(part) + 20 >= MAX_PATH) return;
+    if (lstrlenW(dir) + lstrlenW(part) + 40 >= MAX_PATH) return;
     lstrcatW(dir, part);
     CreateDirectoryW(dir, nullptr);
   }
+  wchar_t previous[MAX_PATH] = {};
+  lstrcpyW(previous, dir);
+  lstrcatW(previous, L"\\Overlay.Diag.previous.log");
   lstrcatW(dir, L"\\Overlay.Diag.log");
+  // Keep the last session's diagnostics: the interesting run is usually the one before the restart
+  MoveFileExW(dir, previous, MOVEFILE_REPLACE_EXISTING);
   g_diag = CreateFileW(dir, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 

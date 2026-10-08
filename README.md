@@ -79,6 +79,13 @@ OverlayBridge.LoadUrl("https://streamemberplatform.github.io/gtav-trainer-script
 - `Overlay.ini` → `StartUrl` yalnız açılışta gösterilen sayfadır (geliştirme için); bir script `LoadUrl` çağırınca onunki geçer.
 - Aynı anda tek bir script sayfa sahibi olmalı (çekirdekte tek gelen kutusu var: `SEO_PollFromUi`).
 
+### Çalışıyor göstergesi
+
+Overlay yüklendiğinde ekranın sol üst köşesinde küçük, yarı saydam bir **StreamEmber** yazısı ve yanında bir nokta
+çizilir (sayfa olmasa da). Nokta çekirdeğin durumunu gösterir: sarı = CEF başlıyor, yeşil = hazır, kırmızı = başlatılamadı
+(sebep `Overlay.Cef.log`'da). Yazı çözünürlükle ölçeklenir, F7 ile overlay gizlenince o da gizlenir.
+Kapatmak için `Overlay.ini` → `ShowBadge=0`.
+
 ## Sayfa API'si (JS)
 
 ```js
@@ -170,12 +177,14 @@ Visual Studio 2022+ ("Desktop development with C++" + "C++ CMake tools"), .NET S
 ## Test adımları
 
 Loglar: `<oyun>\StreamEmber\Logs\` → `Overlay.Backend.log`, `Overlay.log`, `Overlay.Cef.log` (RDR2: + `Overlay.Diag.log`).
+Her açılışta bir önceki oturumun logu `<ad>.previous.log` olarak saklanır (oyun çöktükten/yeniden açıldıktan sonra da
+kanıt kaybolmaz).
 
 1. **Çizim boru hattı (CEF yok).** `Overlay.ini` → `TestPattern=1`. Oyunda sol üstte turuncu çerçeveli çizgili bir
    panel görünmeli. F7 gizler/gösterir, F8 menü modunda beyaz imleç çizer. Oyun görüntüsü bozulmamalı, çözünürlük
    değişimi ve alt-tab sonrası da çalışmalı.
 2. **CEF.** `TestPattern=0`, `StartUrl=https://example.com/` → sayfa görünmeli; F8 ile fare ve klavye çalışmalı.
-   Sonra `StartUrl=` (boş) → hiçbir şey çizilmemeli.
+   Sonra `StartUrl=` (boş) → sol üstteki StreamEmber yazısı dışında hiçbir şey çizilmemeli.
 3. **Script ile.** StreamEmber Trainer kuruluyken F5 → trainer sayfası CDN'den yüklenir (`Overlay.log`: "Loading https://...").
 
 ## Bilinen sınırlar / riskler
