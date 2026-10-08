@@ -1,25 +1,31 @@
-// StreamEmber Trainer Demo — ScriptHookVDotNet v3 script driving an MHud UI through the StreamEmber overlay.
+// StreamEmber Trainer Demo (RDR2) — ScriptHookRDR2DotNet script driving an MHud UI through the StreamEmber overlay.
 //
 //   F5            open / close the trainer menu (↑ ↓ ← → Enter Backspace, or numpad 8 2 4 6 5 0)
 //   F7 / F8       overlay show/hide, mouse+keyboard to the UI (backend hotkeys, see overlay.ini)
 //
 // Message flow: C# -> page uses MHud's NUI protocol ({ action, data }, see MHud/integration/mhud/client/main.lua),
 // page -> C# uses MHud callbacks ({ cb, data }: ready, menuSelect, menuClose) plus 'ack' for latency measurement.
+// Same page and protocol as the GTA V demo (samples/gtav); only the game side differs.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Windows.Forms;
-using GTA;
+using RDR2;
 using StreamEmber.Overlay;
 
 namespace StreamEmber.TrainerDemo
 {
     public sealed class TrainerScript : Script
     {
-        // Game controls the menu keys would otherwise trigger: phone, frontend, radio, weapon wheel
-        private static readonly int[] MenuBlockedControls = { 27, 172, 173, 174, 175, 176, 177, 187, 188, 189, 190, 201, 202, 81, 82, 85, 99, 100 };
+        // Game controls the menu keys would otherwise trigger: frontend navigation, wheels, journal, satchel
+        private static readonly eInputType[] MenuBlockedControls =
+        {
+            eInputType.FrontendUp, eInputType.FrontendDown, eInputType.FrontendLeft, eInputType.FrontendRight,
+            eInputType.FrontendAccept, eInputType.FrontendCancel, eInputType.OpenWheelMenu, eInputType.SelectItemWheel,
+            eInputType.OpenJournal, eInputType.OpenSatchelMenu, eInputType.QuickUseItem, eInputType.Whistle,
+        };
 
-        private readonly WorldTags _tags = new WorldTags(new GtaTagWorld());
+        private readonly WorldTags _tags = new WorldTags(new RdrTagWorld());
         private readonly HudFeed _hud = new HudFeed();
         private readonly MenuController _menus = new MenuController();
         private readonly Trainer _trainer;
@@ -37,7 +43,6 @@ namespace StreamEmber.TrainerDemo
         public TrainerScript()
         {
             _trainer = new Trainer(_tags, _hud, _menus);
-            Interval = 0;
             Tick += OnTick;
             KeyDown += OnKeyDown;
             Aborted += (s, e) => _trainer.Shutdown();
@@ -68,7 +73,7 @@ namespace StreamEmber.TrainerDemo
 
             Player player = Game.Player;
             Ped ped = player.Character;
-            float dt = Game.LastFrameTime;
+            float dt = Game.FrameTime;
             if (dt > 0) _gameFps = _gameFps <= 0 ? 1.0 / dt : _gameFps * 0.95 + (1.0 / dt) * 0.05;
 
             // Input: UI mode (F8) owns mouse+keyboard; menu mode only blocks the menu keys
@@ -79,7 +84,7 @@ namespace StreamEmber.TrainerDemo
             }
             else if (_menus.IsOpen)
             {
-                foreach (int c in MenuBlockedControls) Native.DisableControl(c);
+                foreach (eInputType c in MenuBlockedControls) Native.DisableControl(c);
             }
 
             _trainer.Tick(ped, dt);

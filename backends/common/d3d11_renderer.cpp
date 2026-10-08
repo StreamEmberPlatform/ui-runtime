@@ -1,4 +1,4 @@
-#include "renderer.h"
+#include "d3d11_renderer.h"
 
 #include <d3dcompiler.h>
 
@@ -7,7 +7,7 @@
 #include <cstring>
 #include <vector>
 
-namespace seo_gtav {
+namespace seo_backend {
 namespace {
 
 template <typename T>
@@ -110,6 +110,8 @@ struct StateBackup {
   ID3D11InputLayout* layout = nullptr;
 
   void Save(ID3D11DeviceContext* c) {
+    // In/out capacities: reset every time (the instance is reused across frames)
+    psInstCount = vsInstCount = gsInstCount = hsInstCount = dsInstCount = kMaxInstances;
     scissorCount = viewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
     c->RSGetScissorRects(&scissorCount, scissors);
     c->RSGetViewports(&viewportCount, viewports);
@@ -277,7 +279,9 @@ ID3D11ShaderResourceView* CreateStaticTexture(ID3D11Device* device, std::vector<
   return srv;
 }
 
-DXGI_FORMAT RenderTargetFormat(DXGI_FORMAT format) {
+}  // namespace
+
+DXGI_FORMAT Renderer::RenderTargetFormat(DXGI_FORMAT format) {
   switch (format) {
     case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
     case DXGI_FORMAT_B8G8R8A8_TYPELESS: return DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -287,21 +291,18 @@ DXGI_FORMAT RenderTargetFormat(DXGI_FORMAT format) {
   }
 }
 
-}  // namespace
-
-bool Renderer::EnsureResources(IDXGISwapChain* swapChain) {
-  ID3D11Device* device = nullptr;
-  if (FAILED(swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&device))) || device == nullptr) {
+bool Renderer::SetDevice(ID3D11Device* device) {
+  if (device == nullptr) {
     return false;
   }
   if (device == device_) {
-    device->Release();  // we already hold a reference
     return !failed_;
   }
 
   // First frame, or the game recreated its device
   ReleaseAll();
-  device_ = device;  // keep the reference from GetDevice
+  device_ = device;
+  device_->AddRef();
   device_->GetImmediateContext(&context_);
   BLogInfo("D3D11 device acquired (feature level " + Hex(device_->GetFeatureLevel()) + ").");
   failed_ = !CreatePipeline() || !CreateStaticTextures();
@@ -505,22 +506,15 @@ void Renderer::DrawQuad(ID3D11ShaderResourceView* srv, bool swizzle, float left,
   context_->Draw(4, 0);
 }
 
-void Renderer::OnPresent(IDXGISwapChain* swapChain) {
-  if (swapChain == nullptr) {
-    return;
+bool Renderer::BeginFrame(int width, int height) {
+  drawUi_ = drawTest_ = drawCursor_ = false;
+  if (device_ == nullptr || failed_ || width <= 0 || height <= 0) {
+    return false;
   }
-  DXGI_SWAP_CHAIN_DESC scDesc = {};
-  if (FAILED(swapChain->GetDesc(&scDesc)) || scDesc.BufferDesc.Width == 0 || scDesc.BufferDesc.Height == 0) {
-    return;
-  }
-  width_ = static_cast<int>(scDesc.BufferDesc.Width);
-  height_ = static_cast<int>(scDesc.BufferDesc.Height);
+  width_ = width;
+  height_ = height;
   g_backBufferWidth.store(width_);
   g_backBufferHeight.store(height_);
-
-  if (!EnsureResources(swapChain)) {
-    return;
-  }
 
   const Config& cfg = GetConfig();
   const bool visible = IsOverlayVisible();
@@ -532,40 +526,29 @@ void Renderer::OnPresent(IDXGISwapChain* swapChain) {
     }
   }
 
-  const int cursorX = g_cursorX.load();
-  const int cursorY = g_cursorY.load();
-  const bool drawUi = visible && core != nullptr && uiHasContent_;
-  const bool drawTest = visible && cfg.testPattern;
-  const bool drawCursor = visible && cfg.drawCursor && IsUiInputMode() && cursorX >= 0 && cursorY >= 0;
-  if (!drawUi && !drawTest && !drawCursor) {
+  drawUi_ = visible && core != nullptr && uiHasContent_;
+  drawTest_ = visible && cfg.testPattern;
+  drawCursor_ = visible && cfg.drawCursor && IsUiInputMode() && g_cursorX.load() >= 0 && g_cursorY.load() >= 0;
+  return drawUi_ || drawTest_ || drawCursor_;
+}
+
+void Renderer::Draw(ID3D11RenderTargetView* rtv, bool preserveState) {
+  if (rtv == nullptr || context_ == nullptr || failed_ || !(drawUi_ || drawTest_ || drawCursor_)) {
+    return;
+  }
+  const CoreApi* core = GetCore();
+  if (drawUi_ && core == nullptr) {
     return;
   }
 
-  ID3D11Texture2D* backBuffer = nullptr;
-  if (FAILED(swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer)))) {
-    return;
+  // ~10 KB: static instead of on the game's render thread stack, and no allocation that could throw.
+  // Draw only runs on the one render thread.
+  static StateBackup s_backup;
+  StateBackup* backup = nullptr;
+  if (preserveState) {
+    backup = &s_backup;
+    backup->Save(context_);
   }
-  D3D11_TEXTURE2D_DESC bbDesc = {};
-  backBuffer->GetDesc(&bbDesc);
-  D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-  rtvDesc.Format = RenderTargetFormat(bbDesc.Format);
-  rtvDesc.ViewDimension = bbDesc.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
-  ID3D11RenderTargetView* rtv = nullptr;
-  // Created and released every frame: holding a back buffer reference would make the game's ResizeBuffers fail.
-  const HRESULT hr = device_->CreateRenderTargetView(backBuffer, &rtvDesc, &rtv);
-  backBuffer->Release();
-  if (FAILED(hr)) {
-    static bool logged = false;
-    if (!logged) {
-      logged = true;
-      BLogError("CreateRenderTargetView failed: " + Hex(hr) + " (back buffer format " +
-                std::to_string(static_cast<int>(bbDesc.Format)) + ")");
-    }
-    return;
-  }
-
-  StateBackup backup;
-  backup.Save(context_);
 
   const FLOAT blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   D3D11_VIEWPORT viewport = {0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 1.0f};
@@ -590,7 +573,7 @@ void Renderer::OnPresent(IDXGISwapChain* swapChain) {
   context_->DSSetShader(nullptr, nullptr, 0);
 
   const float scale = std::max(1.0f, static_cast<float>(height_) / 1080.0f);
-  if (drawUi) {
+  if (drawUi_) {
     // World-anchored sprites first (beneath the HUD/menus), then the screen part of the page.
     DrawSprites(core);
     // The view may be taller than the screen (atlas below it): sample only the screen part.
@@ -598,19 +581,26 @@ void Renderer::OnPresent(IDXGISwapChain* swapChain) {
     DrawQuad(uiSrv_, uiSwizzle_, 0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 0.0f, 1.0f,
              v1);
   }
-  if (drawTest) {
+  if (drawTest_) {
     const float x = 48.0f * scale;
     const float y = 48.0f * scale;
     DrawQuad(testSrv_, false, x, y, x + 512.0f * scale, y + 256.0f * scale);
   }
-  if (drawCursor) {
-    const float x = static_cast<float>(cursorX);
-    const float y = static_cast<float>(cursorY);
+  if (drawCursor_) {
+    const float x = static_cast<float>(g_cursorX.load());
+    const float y = static_cast<float>(g_cursorY.load());
     DrawQuad(cursorSrv_, false, x, y, x + 32.0f * scale, y + 32.0f * scale);
   }
 
-  backup.Restore(context_);
-  rtv->Release();
+  if (backup != nullptr) {
+    backup->Restore(context_);  // also releases the saved references
+  } else {
+    // Our own context (D3D11On12): just drop the references to the back buffer view and the UI texture
+    ID3D11RenderTargetView* nullRtv = nullptr;
+    ID3D11ShaderResourceView* nullSrv = nullptr;
+    context_->OMSetRenderTargets(1, &nullRtv, nullptr);
+    context_->PSSetShaderResources(0, 1, &nullSrv);
+  }
 }
 
 void Renderer::DrawSprites(const CoreApi* core) {
@@ -667,4 +657,4 @@ void Renderer::ReleaseAll() {
   failed_ = false;
 }
 
-}  // namespace seo_gtav
+}  // namespace seo_backend

@@ -76,7 +76,7 @@ namespace StreamEmber.TrainerDemo
         {
             int stamina = Clamp((int)Math.Round(100f - Native.SprintStaminaUsed(player)), 0, 100);
             JsonWriter w = Ui.Begin("mhud:vitals").BeginObject()
-                .Prop("health", WorldTags.PedHealthPercent(ped))
+                .Prop("health", GtaTagWorld.PedHealthPercent(ped))
                 .Prop("armor", Clamp(ped.Armor, 0, 100))
                 .Prop("stamina", stamina);
             if (Native.IsSwimmingUnderWater(ped))

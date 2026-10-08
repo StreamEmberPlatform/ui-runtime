@@ -2,18 +2,18 @@
 <#
 .SYNOPSIS
     StreamEmber OverlayRuntime: CEF'i indirir, C++ projelerini ve C# köprüsünü derler, dist\ altında paketler,
-    istenirse GTA V klasörüne kurar.
+    istenirse GTA V ya da RDR2 klasörüne kurar.
 
 .DESCRIPTION
     1. CEF (minimal dağıtım) third_party\cef altına indirilir. Sürüm cef.lock dosyasına yazılır; sonraki
        derlemeler aynı sürümü kullanır. Yeni sürüme geçmek için: -UpdateCef
     2. CMake ile Visual Studio projesi oluşturulur (build\) ve derlenir.
-    3. dist\ klasörü oyun klasörü düzeninde hazırlanır:
-         dist\StreamEmber.Overlay.GTAV.asi
-         dist\StreamEmber\Overlay\   (çekirdek DLL, host exe, CEF dosyaları, ui\, overlay.ini)
-         dist\scripts\               (StreamEmber.Overlay.Bridge.dll, StreamEmber.TrainerDemo.dll)
+    3. Her oyun için dist\<oyun>\ klasörü oyun klasörü düzeninde hazırlanır:
+         dist\GTAV\StreamEmber.Overlay.GTAV.asi      dist\RDR2\StreamEmber.Overlay.RDR2.asi
+         dist\<oyun>\StreamEmber\Overlay\   (çekirdek DLL, host exe, CEF dosyaları, ui\, overlay.ini)
+         dist\<oyun>\scripts\               (StreamEmber.Overlay.Bridge.dll + o oyunun trainer demosu)
        ui\mhud\ altına ../MHud kiti ve FiveM sayfası kopyalanır; trainer.html bu sayfaya trainer.js eklenerek üretilir.
-    4. -Deploy verilirse dist\ oyun klasörüne kopyalanır (mevcut overlay.ini korunur).
+    4. -Deploy verilirse -Game ile seçilen oyunun dist\ klasörü oyun klasörüne kopyalanır (overlay.ini korunur).
 
     Ön koşullar: Visual Studio 2022+ ("Desktop development with C++"), CMake 3.21+ (VS ile gelen de olur),
     .NET SDK (köprü için). İnternet: cef-builds.spotifycdn.com
@@ -22,8 +22,11 @@
     Release (varsayılan) ya da Debug.
 .PARAMETER Deploy
     dist\ içeriğini oyun klasörüne kopyalar. Oyun kapalı olmalı.
+.PARAMETER Game
+    Kurulacak oyun: GTAV (varsayılan) ya da RDR2. Derleme her zaman ikisini de üretir.
 .PARAMETER GamePath
-    GTA V klasörü (GTA5.exe'nin olduğu yer). Verilmezse GTAV_GAME_PATH, o da yoksa GTAV_SCRIPT_PATH'in üst klasörü.
+    Oyun klasörü (GTA5.exe / RDR2.exe'nin olduğu yer). Verilmezse GTA V için GTAV_GAME_PATH (yoksa
+    GTAV_SCRIPT_PATH'in üst klasörü), RDR2 için RDR2_GAME_PATH.
 .PARAMETER UpdateCef
     cef.lock'u yok sayar, desteklenen aralıktaki en yeni stable CEF'e geçer.
 .PARAMETER SkipBridge
@@ -37,12 +40,16 @@
     .\build.ps1 -Deploy
 .EXAMPLE
     .\build.ps1 -Deploy -GamePath "D:\EpicGames\GTAV"
+.EXAMPLE
+    .\build.ps1 -Deploy -Game RDR2 -GamePath "D:\SteamLibrary\steamapps\common\Red Dead Redemption 2"
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
     [switch]$Deploy,
+    [ValidateSet('GTAV', 'RDR2')]
+    [string]$Game = 'GTAV',
     [string]$GamePath,
     [switch]$UpdateCef,
     [switch]$SkipBridge,
@@ -190,18 +197,34 @@ function Build-Native {
     Write-Ok 'C++ projeleri derlendi.'
 }
 
+# Returns @{ GTAV = <output dir or $null>; RDR2 = <output dir or $null> }
 function Build-Managed {
-    Write-Title '3/4  C# köprüsü + trainer demosu'
-    if ($SkipBridge) { Write-Warn 'Atlandı (-SkipBridge).'; return $null }
+    Write-Title '3/4  C# köprüsü + trainer demoları'
+    $result = @{ GTAV = $null; RDR2 = $null }
+    if ($SkipBridge) { Write-Warn 'Atlandı (-SkipBridge).'; return $result }
     $dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
-    if (-not $dotnet) { Write-Warn '.NET SDK yok; C# projeleri atlandı.'; return $null }
-    $out = Join-Path $BuildDir 'managed'
-    # Trainer demo references the bridge project, so one build produces both DLLs
+    if (-not $dotnet) { Write-Warn '.NET SDK yok; C# projeleri atlandı.'; return $result }
+
+    # Each trainer references the bridge project, so one build produces both DLLs
+    $out = Join-Path $BuildDir 'managed\gtav'
     $project = Join-Path $Root 'samples\gtav\TrainerDemo\StreamEmber.TrainerDemo.csproj'
     & $dotnet.Source build $project -c $Configuration -o $out --nologo -v minimal | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "C# projeleri derlenemedi ($LASTEXITCODE). SHVDN başvurusu: ..\GTAVScriptHook\lib\ScriptHookVDotNet3.dll" }
-    Write-Ok 'StreamEmber.Overlay.Bridge.dll + StreamEmber.TrainerDemo.dll derlendi.'
-    return $out
+    if ($LASTEXITCODE -ne 0) { throw "GTA V trainer derlenemedi ($LASTEXITCODE). SHVDN başvurusu: ..\GTAVScriptHookRuntime\bin\Release\ScriptHookVDotNet3.dll" }
+    Write-Ok 'GTA V: StreamEmber.Overlay.Bridge.dll + StreamEmber.TrainerDemo.dll'
+    $result.GTAV = $out
+
+    $rdrApi = Join-Path (Split-Path $Root -Parent) 'RDR2ScriptHookRuntime\bin\Release\ScriptHookRDRNetAPI.dll'
+    if (Test-Path $rdrApi) {
+        $out = Join-Path $BuildDir 'managed\rdr2'
+        $project = Join-Path $Root 'samples\rdr2\TrainerDemo\StreamEmber.Rdr2TrainerDemo.csproj'
+        & $dotnet.Source build $project -c $Configuration -o $out --nologo -v minimal | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "RDR2 trainer derlenemedi ($LASTEXITCODE)." }
+        Write-Ok 'RDR2: StreamEmber.Overlay.Bridge.dll + StreamEmber.Rdr2TrainerDemo.dll'
+        $result.RDR2 = $out
+    } else {
+        Write-Warn "RDR2 trainer atlandı: önce ..\RDR2ScriptHookRuntime\build.ps1 çalıştırın ($rdrApi yok)."
+    }
+    return $result
 }
 
 # MHud's FiveM page (integration/mhud/html) + kit, unchanged; trainer.html = that page + trainer.css/trainer.js
@@ -229,14 +252,22 @@ function Copy-MHudUi([string]$UiDir) {
     Write-Ok 'MHud arayüzü + trainer.html hazır.'
 }
 
-function New-Dist([string]$ManagedDir) {
-    Write-Title '4/4  dist\'
-    if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
-    $overlayDir = Join-Path $DistDir 'StreamEmber\Overlay'
-    $scriptsDir = Join-Path $DistDir 'scripts'
+# Game specific parts of the layout
+$Games = @{
+    GTAV = @{ Asi = 'StreamEmber.Overlay.GTAV.asi'; Exe = 'GTA5.exe'; Process = 'GTA5'; Env = 'GTAV_GAME_PATH';
+              Trainer = @('StreamEmber.TrainerDemo.dll', 'StreamEmber.TrainerDemo.pdb'); Log = 'gtav-backend.log' }
+    RDR2 = @{ Asi = 'StreamEmber.Overlay.RDR2.asi'; Exe = 'RDR2.exe'; Process = 'RDR2'; Env = 'RDR2_GAME_PATH';
+              Trainer = @('StreamEmber.Rdr2TrainerDemo.dll', 'StreamEmber.Rdr2TrainerDemo.pdb'); Log = 'rdr2-backend.log' }
+}
+
+function New-GameDist([string]$Name, [string]$ManagedDir) {
+    $info = $Games[$Name]
+    $dist = Join-Path $DistDir $Name
+    $overlayDir = Join-Path $dist 'StreamEmber\Overlay'
+    $scriptsDir = Join-Path $dist 'scripts'
     New-Item -ItemType Directory -Force -Path $overlayDir, $scriptsDir | Out-Null
 
-    Copy-Item (Find-Output 'StreamEmber.Overlay.GTAV.asi') $DistDir
+    Copy-Item (Find-Output $info.Asi) $dist
     Copy-Item (Find-Output 'StreamEmber.Overlay.dll') $overlayDir
     Copy-Item (Find-Output 'StreamEmber.Overlay.Host.exe') $overlayDir
 
@@ -252,33 +283,42 @@ function New-Dist([string]$ManagedDir) {
 
     # Only one script may consume UI messages, so the old OverlayDemo.3.cs sample is not deployed with the trainer.
     if ($ManagedDir -and (Test-Path $ManagedDir)) {
-        foreach ($f in 'StreamEmber.Overlay.Bridge.dll', 'StreamEmber.TrainerDemo.dll', 'StreamEmber.TrainerDemo.pdb') {
+        foreach ($f in @('StreamEmber.Overlay.Bridge.dll') + $info.Trainer) {
             $p = Join-Path $ManagedDir $f
             if (Test-Path $p) { Copy-Item $p $scriptsDir }
         }
     }
+    $size = (Get-ChildItem $dist -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
+    Write-Ok ("dist\{0}\ hazır ({1:N0} MB)" -f $Name, $size)
+}
 
-    $size = (Get-ChildItem $DistDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
-    Write-Ok ("dist\ hazır ({0:N0} MB)" -f $size)
+function New-Dist($Managed) {
+    Write-Title '4/4  dist\'
+    if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
+    New-GameDist 'GTAV' $Managed.GTAV
+    New-GameDist 'RDR2' $Managed.RDR2
 }
 
 function Resolve-GamePath {
     if ($GamePath) { return $GamePath }
-    if ($env:GTAV_GAME_PATH) { return $env:GTAV_GAME_PATH }
-    if ($env:GTAV_SCRIPT_PATH) { return (Split-Path $env:GTAV_SCRIPT_PATH -Parent) }
-    throw 'Oyun klasörü bilinmiyor: -GamePath verin ya da GTAV_GAME_PATH ortam değişkenini ayarlayın.'
+    $fromEnv = [Environment]::GetEnvironmentVariable($Games[$Game].Env)
+    if ($fromEnv) { return $fromEnv }
+    if ($Game -eq 'GTAV' -and $env:GTAV_SCRIPT_PATH) { return (Split-Path $env:GTAV_SCRIPT_PATH -Parent) }
+    throw "Oyun klasörü bilinmiyor: -GamePath verin ya da $($Games[$Game].Env) ortam değişkenini ayarlayın."
 }
 
 function Install-ToGame {
-    Write-Title 'Kurulum'
+    Write-Title "Kurulum ($Game)"
+    $info = $Games[$Game]
     $game = Resolve-GamePath
-    if (-not (Test-Path (Join-Path $game 'GTA5.exe'))) { throw "GTA5.exe bulunamadı: $game" }
-    if (Get-Process -Name 'GTA5' -ErrorAction SilentlyContinue) { throw 'GTA V açık; dosyalar kilitli. Oyunu kapatın.' }
+    if (-not (Test-Path (Join-Path $game $info.Exe))) { throw "$($info.Exe) bulunamadı: $game" }
+    if (Get-Process -Name $info.Process -ErrorAction SilentlyContinue) { throw "$Game açık; dosyalar kilitli. Oyunu kapatın." }
+    $dist = Join-Path $DistDir $Game
 
-    Copy-Item (Join-Path $DistDir 'StreamEmber.Overlay.GTAV.asi') $game -Force
+    Copy-Item (Join-Path $dist $info.Asi) $game -Force
     $target = Join-Path $game 'StreamEmber\Overlay'
     New-Item -ItemType Directory -Force -Path $target | Out-Null
-    $source = Join-Path $DistDir 'StreamEmber\Overlay'
+    $source = Join-Path $dist 'StreamEmber\Overlay'
     Get-ChildItem $source | ForEach-Object {
         if ($_.Name -eq 'overlay.ini' -and (Test-Path (Join-Path $target 'overlay.ini')) -and -not $ResetConfig) {
             Write-Warn 'overlay.ini zaten var; korunuyor (şablonu yazmak için -ResetConfig). Trainer için: StartUrl=mhud/trainer.html'
@@ -293,9 +333,14 @@ function Install-ToGame {
         Move-Item $oldDemo "$oldDemo.disabled" -Force
         Write-Warn 'scripts\OverlayDemo.3.cs devre dışı bırakıldı (.disabled): trainer ile aynı mesaj kuyruğunu okuyordu.'
     }
-    Copy-Item (Join-Path $DistDir 'scripts\*') $scripts -Force
+    if (Test-Path (Join-Path $dist 'scripts\*')) { Copy-Item (Join-Path $dist 'scripts\*') $scripts -Force }
+    if ($Game -eq 'RDR2') {
+        foreach ($need in 'ScriptHookRDR2.dll', 'dinput8.dll', 'ScriptHookRDRDotNet.asi') {
+            if (-not (Test-Path (Join-Path $game $need))) { Write-Warn "$need oyun klasöründe yok (ScriptHookRDR2 / RDR2ScriptHookRuntime kurulu mu?)." }
+        }
+    }
     Write-Ok "Kuruldu: $game"
-    Write-Host '  Loglar: StreamEmber\Overlay\logs\ (gtav-backend.log, overlay.log, cef.log)'
+    Write-Host "  Loglar: StreamEmber\Overlay\logs\ ($($info.Log), overlay.log, cef.log)"
 }
 
 $lock = Install-Cef

@@ -7,7 +7,7 @@
 
 #include "backend_common.h"
 
-namespace seo_gtav {
+namespace seo_backend {
 namespace {
 
 std::atomic<HWND> g_window{nullptr};
@@ -296,4 +296,4 @@ void UninstallInputHook() {
   }
 }
 
-}  // namespace seo_gtav
+}  // namespace seo_backend

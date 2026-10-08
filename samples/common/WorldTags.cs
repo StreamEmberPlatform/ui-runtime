@@ -9,18 +9,45 @@
 //  Html (MHud's FiveM way, for comparison): positions are sent to the page as 'mhud:nametags' every frame and
 //    MHud moves DOM nodes. The browser pipeline adds several frames of latency (measured with seq/ack).
 //
-// Native reference dots are drawn by the game with SET_DRAW_ORIGIN (projected by the renderer itself = ground
+// Native reference dots are drawn by the game itself at the world anchor (projected by the renderer = ground
 // truth). A tag's bottom edge should sit on its dot.
+//
+// Game independent: everything that touches the game (entity pools, projection, tag content) goes through
+// ITagWorld (GtaTagWorld in samples/gtav, RdrTagWorld in samples/rdr2).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using GTA;
-using GTA.Math;
-using GTA.Native;
 using StreamEmber.Overlay;
 
 namespace StreamEmber.TrainerDemo
 {
+    /// <summary>One entity that may get a tag this frame. Anchor = world point the tag's bottom edge sits on.</summary>
+    internal struct TagCandidate
+    {
+        public object Entity;   // game entity (GTA.Entity / RDR2.Entity)
+        public int Handle;
+        public bool IsPed;
+        public float Distance;
+        public float AX, AY, AZ;
+    }
+
+    /// <summary>The game specific side of WorldTags.</summary>
+    internal interface ITagWorld
+    {
+        /// <summary>Adds the entities around the player (unsorted, within radius) to the list.</summary>
+        void Collect(List<TagCandidate> output, float radius, WorldTags.Filter target);
+        /// <summary>World position -> normalized screen position (0..1). False when off screen.</summary>
+        bool WorldToScreen(float x, float y, float z, out float sx, out float sy);
+        /// <summary>Back buffer size in pixels.</summary>
+        void GetScreenSize(out int width, out int height);
+        /// <summary>Draws a small game-rendered marker at each of the first 'max' anchors.</summary>
+        void DrawReferences(List<TagCandidate> candidates, int max);
+        /// <summary>Changes whenever the visible tag content changes (distance already rounded).</summary>
+        string Signature(TagCandidate c, int roundedDistance);
+        /// <summary>MHud tag fields (see MH.Nametags in MHud/kit/js/mhud.js) except id/position/dist.</summary>
+        void WriteFields(JsonWriter w, TagCandidate c);
+    }
+
     internal sealed class WorldTags
     {
         public enum Filter { All = 0, Peds = 1, Vehicles = 2 }
@@ -30,7 +57,7 @@ namespace StreamEmber.TrainerDemo
         private const int SlotDesignWidth = 240;
         private const int SlotDesignHeight = 84;
         private const int SlotReleaseFrames = 30;
-        private const int MaxDrawOrigins = 30;  // the game supports ~32 draw origins per frame
+        private const int MaxReferences = 30;  // GTA supports ~32 draw origins per frame
 
         // Settings (changed from the performance menu)
         public bool Enabled = true;
@@ -53,14 +80,6 @@ namespace StreamEmber.TrainerDemo
         public int ContentUpdatesPerSecond;
         public int AtlasSlots;
 
-        private struct Candidate
-        {
-            public Entity Entity;
-            public bool IsPed;
-            public float Distance;
-            public Vector3 Anchor;
-        }
-
         private struct Sent
         {
             public int Seq;
@@ -80,9 +99,8 @@ namespace StreamEmber.TrainerDemo
             public float LastX = -1, LastY = -1;
         }
 
-        private readonly List<Candidate> _candidates = new List<Candidate>(512);
-        private readonly Dictionary<int, string> _vehicleLabels = new Dictionary<int, string>();   // by model hash
-        private readonly Dictionary<int, float> _vehicleHeights = new Dictionary<int, float>();    // by model hash
+        private readonly ITagWorld _world;
+        private readonly List<TagCandidate> _candidates = new List<TagCandidate>(512);
         private readonly Sent[] _sent = new Sent[64];
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private readonly Stopwatch _collect = new Stopwatch();
@@ -99,16 +117,19 @@ namespace StreamEmber.TrainerDemo
         private readonly Stack<Slot> _freeSlots = new Stack<Slot>();
         private readonly List<Slot> _changed = new List<Slot>();
         private readonly List<int> _cleared = new List<int>();
-        private readonly Dictionary<int, Candidate> _changedContent = new Dictionary<int, Candidate>();
+        private readonly Dictionary<int, TagCandidate> _changedContent = new Dictionary<int, TagCandidate>();
         private OverlaySprite[] _sprites = new OverlaySprite[OverlayBridge.MaxSprites];
         private AtlasLayout _requested;
         private AtlasLayout _pageLayout;
         private int _screenWidth = 1920, _screenHeight = 1080;
         private bool _atlasActive;
-        private readonly OutputArgument _resX = new OutputArgument();
-        private readonly OutputArgument _resY = new OutputArgument();
 
-        public void Tick(Ped player, int frame)
+        public WorldTags(ITagWorld world)
+        {
+            _world = world;
+        }
+
+        public void Tick(int frame)
         {
             if (!Enabled)
             {
@@ -117,13 +138,13 @@ namespace StreamEmber.TrainerDemo
             }
 
             _collect.Restart();
-            Collect(player);
+            Collect();
             _collect.Stop();
             AvgCollectMs = AvgCollectMs * 0.9 + _collect.Elapsed.TotalMilliseconds * 0.1;
 
             if (NativeReferences)
             {
-                DrawNativeReferences();
+                _world.DrawReferences(_candidates, MaxReferences);
             }
 
             if (Positioning == Mode.Atlas)
@@ -193,60 +214,14 @@ namespace StreamEmber.TrainerDemo
 
         // ------------------------------------------------------------------ collection
 
-        private void Collect(Ped player)
+        private void Collect()
         {
             _candidates.Clear();
-            Vector3 me = player.Position;
-            Vehicle myVehicle = player.CurrentVehicle;
-
-            if (Target != Filter.Vehicles)
-            {
-                foreach (Ped ped in World.GetNearbyPeds(player, Radius))
-                {
-                    if (ped == null || !ped.Exists()) continue;
-                    Vector3 p = ped.Position;
-                    _candidates.Add(new Candidate
-                    {
-                        Entity = ped,
-                        IsPed = true,
-                        Distance = p.DistanceTo(me),
-                        Anchor = new Vector3(p.X, p.Y, p.Z + 1.05f),
-                    });
-                }
-            }
-            if (Target != Filter.Peds)
-            {
-                foreach (Vehicle veh in World.GetNearbyVehicles(me, Radius))
-                {
-                    if (veh == null || !veh.Exists() || veh == myVehicle) continue;
-                    Vector3 p = veh.Position;
-                    _candidates.Add(new Candidate
-                    {
-                        Entity = veh,
-                        IsPed = false,
-                        Distance = p.DistanceTo(me),
-                        Anchor = new Vector3(p.X, p.Y, p.Z + VehicleTop(veh) + 0.25f),
-                    });
-                }
-            }
-
+            _world.Collect(_candidates, Radius, Target);
             _candidates.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             if (_candidates.Count > MaxCount)
             {
                 _candidates.RemoveRange(MaxCount, _candidates.Count - MaxCount);
-            }
-        }
-
-        private void DrawNativeReferences()
-        {
-            // SET_DRAW_ORIGIN lets the renderer project the world point itself in the frame it draws.
-            int drawn = 0;
-            foreach (Candidate c in _candidates)
-            {
-                if (drawn++ >= MaxDrawOrigins) break;
-                Function.Call(Hash.SET_DRAW_ORIGIN, c.Anchor.X, c.Anchor.Y, c.Anchor.Z, false);
-                Native.DrawRect(0f, 0f, 0.0035f, 0.0062f, 255, 40, 60, 230);
-                Function.Call(Hash.CLEAR_DRAW_ORIGIN);
             }
         }
 
@@ -271,10 +246,10 @@ namespace StreamEmber.TrainerDemo
             int visible = 0;
             _changed.Clear();
             _changedContent.Clear();
-            foreach (Candidate c in _candidates)
+            foreach (TagCandidate c in _candidates)
             {
-                if (!Native.WorldToScreen(c.Anchor, out float x, out float y)) continue;
-                Slot slot = AcquireSlot(c.Entity.Handle);
+                if (!_world.WorldToScreen(c.AX, c.AY, c.AZ, out float x, out float y)) continue;
+                Slot slot = AcquireSlot(c.Handle);
                 if (slot == null) continue;
                 slot.LastSeenFrame = frame;
                 visible++;
@@ -322,9 +297,9 @@ namespace StreamEmber.TrainerDemo
 
         private void EnsureAtlasLayout()
         {
-            Function.Call(Hash.GET_ACTUAL_SCREEN_RESOLUTION, _resX, _resY);
-            int w = Math.Max(640, _resX.GetResult<int>());
-            int h = Math.Max(360, _resY.GetResult<int>());
+            _world.GetScreenSize(out int resX, out int resY);
+            int w = Math.Max(640, resX);
+            int h = Math.Max(360, resY);
             _screenWidth = w;
             _screenHeight = h;
             int slotW = (int)Math.Round(SlotDesignWidth * h / 1080.0);
@@ -447,12 +422,12 @@ namespace StreamEmber.TrainerDemo
 
             int count = 0;
             JsonWriter w = Ui.Begin("mhud:nametags").BeginArray();
-            foreach (Candidate c in _candidates)
+            foreach (TagCandidate c in _candidates)
             {
-                if (!Native.WorldToScreen(c.Anchor, out float x, out float y)) continue;
+                if (!_world.WorldToScreen(c.AX, c.AY, c.AZ, out float x, out float y)) continue;
                 float k = 1f - Math.Min(1f, c.Distance / Radius);
                 w.BeginObject()
-                    .Prop("id", c.Entity.Handle)
+                    .Prop("id", c.Handle)
                     .Prop("x", x).Prop("y", y)
                     .Prop("scale", 0.75f + k * 0.35f, "0.###")
                     .Prop("alpha", 0.45f + k * 0.55f, "0.###");
@@ -484,7 +459,7 @@ namespace StreamEmber.TrainerDemo
             _htmlTagsShown = false;
         }
 
-        private void WriteTagContent(JsonWriter w, Candidate c)
+        private void WriteTagContent(JsonWriter w, TagCandidate c)
         {
             w.BeginObject();
             WriteTagFields(w, c);
@@ -492,91 +467,18 @@ namespace StreamEmber.TrainerDemo
         }
 
         /// <summary>MHud tag fields (see MH.Nametags in MHud/kit/js/mhud.js), without position.</summary>
-        private void WriteTagFields(JsonWriter w, Candidate c)
+        private void WriteTagFields(JsonWriter w, TagCandidate c)
         {
             w.Prop("dist", RoundDistance(c.Distance));
-            if (c.IsPed)
-            {
-                var ped = (Ped)c.Entity;
-                int type = Native.PedType(ped);
-                bool cop = type == 6 || type == 27 || type == 29;
-                bool animal = type == 28;
-                w.Prop("name", cop ? "Polis" : animal ? "Hayvan" : ped.Gender == Gender.Female ? "Yaya (K)" : "Yaya (E)")
-                    .Prop("icon", animal ? "paw" : "user")
-                    .Prop("tone", cop ? "enemy" : "team1")
-                    .Prop("health", PedHealthPercent(ped))
-                    .Prop("dead", ped.IsDead);
-                if (ped.Armor > 0) w.Prop("armor", Math.Min(100, ped.Armor));
-            }
-            else
-            {
-                var veh = (Vehicle)c.Entity;
-                w.Prop("name", VehicleLabel(veh))
-                    .Prop("icon", VehicleIcon(veh))
-                    .Prop("tone", "team3")
-                    .Prop("health", Clamp((int)(veh.EngineHealth / 10f), 0, 100))
-                    .Prop("compact", true);
-            }
+            _world.WriteFields(w, c);
         }
 
-        private string ContentSignature(Candidate c)
-        {
-            int dist = RoundDistance(c.Distance);
-            if (c.IsPed)
-            {
-                var ped = (Ped)c.Entity;
-                return "p|" + dist + "|" + PedHealthPercent(ped) + "|" + ped.Armor + "|" + (ped.IsDead ? 1 : 0) + "|" + ped.Model.Hash;
-            }
-            var veh = (Vehicle)c.Entity;
-            return "v|" + dist + "|" + (int)(veh.EngineHealth / 10f) + "|" + veh.Model.Hash;
-        }
+        private string ContentSignature(TagCandidate c) => _world.Signature(c, RoundDistance(c.Distance));
 
         private int RoundDistance(float d)
         {
             int step = Math.Max(1, DistanceStep);
             return (int)Math.Round(d / step) * step;
-        }
-
-        /// <summary>Same health scale as MHud's FiveM resource: 100 = dead line, MaxHealth = full.</summary>
-        public static int PedHealthPercent(Ped ped)
-        {
-            int max = ped.MaxHealth;
-            if (max <= 100) return Clamp(ped.Health * 100 / Math.Max(1, max), 0, 100);
-            return Clamp((ped.Health - 100) * 100 / Math.Max(1, max - 100), 0, 100);
-        }
-
-        private string VehicleLabel(Vehicle veh)
-        {
-            int hash = veh.Model.Hash;
-            if (!_vehicleLabels.TryGetValue(hash, out string label))
-            {
-                label = Native.VehicleDisplayName(veh.Model);
-                if (string.IsNullOrEmpty(label) || label == "NULL") label = "Araç";
-                _vehicleLabels[hash] = label;
-            }
-            return label;
-        }
-
-        private float VehicleTop(Vehicle veh)
-        {
-            int hash = veh.Model.Hash;
-            if (!_vehicleHeights.TryGetValue(hash, out float top))
-            {
-                veh.Model.GetDimensions(out Vector3 min, out Vector3 max);
-                top = max.Z > 0.1f ? max.Z : 1.4f;
-                _vehicleHeights[hash] = top;
-            }
-            return top;
-        }
-
-        private static string VehicleIcon(Vehicle veh)
-        {
-            Model m = veh.Model;
-            if (m.IsHelicopter) return "heli";
-            if (m.IsPlane) return "plane";
-            if (m.IsBike || m.IsBicycle) return "bike";
-            if (m.IsBoat) return "boat";
-            return "car";
         }
 
         private static int Clamp(int v, int min, int max) => v < min ? min : v > max ? max : v;

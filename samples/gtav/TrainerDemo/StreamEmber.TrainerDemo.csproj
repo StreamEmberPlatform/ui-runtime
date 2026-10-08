@@ -26,6 +26,8 @@
     </Reference>
     <Reference Include="System.Windows.Forms" />
     <ProjectReference Include="..\..\..\bridge\StreamEmber.Overlay.Bridge\StreamEmber.Overlay.Bridge.csproj" />
+    <!-- Game independent trainer parts (JSON, MHud messages, menus, world tag engine), shared with samples\rdr2 -->
+    <Compile Include="..\..\common\*.cs" Link="Common\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

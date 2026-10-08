@@ -3,7 +3,8 @@
 # Targets:
 #   StreamEmber.Overlay        core DLL (CEF browser process side, C ABI in include/se_overlay.h)
 #   StreamEmber.Overlay.Host   CEF sub-process exe (renderer + JS bridge)
-#   StreamEmber.Overlay.GTAV   GTA V backend (.asi, D3D11, ScriptHookV)
+#   StreamEmber.Overlay.GTAV   GTA V backend (.asi, D3D11, ScriptHookV present callback)
+#   StreamEmber.Overlay.RDR2   RDR2 backend (.asi, D3D12 via D3D11On12, own DXGI hooks with MinHook)
 #
 # Normally driven by build.ps1, which downloads CEF into third_party/cef first.
 cmake_minimum_required(VERSION 3.21)
@@ -38,6 +39,8 @@ set(SEO_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_subdirectory(core)
 add_subdirectory(host)
+add_subdirectory(backends/common)
 add_subdirectory(backends/gtav-d3d11)
+add_subdirectory(backends/rdr2-d3d12)
 
 PRINT_CEF_CONFIG()

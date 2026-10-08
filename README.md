@@ -4,21 +4,22 @@ Tek oyunculu oyun modları için **HTML/CSS/JS overlay**'i (FiveM NUI benzeri). 
 oyun sürecinde pencere olmadan (offscreen) çalışır; sayfanın görüntüsü her karede oyunun üzerine çizilir; sayfa ile
 oyun scriptleri arasında JSON mesajlaşması vardır.
 
-Oyundan bağımsız bir çekirdek ve oyuna özel çizim katmanlarından (backend) oluşur. Şu an **GTA V (Legacy, D3D11)**
-backend'i var; RDR2 backend'i aynı çekirdeği kullanacak. Gösterilecek içerik (HUD kiti) `../MHud`'dan gelecek.
+Oyundan bağımsız bir çekirdek ve oyuna özel çizim katmanlarından (backend) oluşur: **GTA V (Legacy, D3D11)** ve
+**RDR2 (DirectX 12)**. İkisi aynı çekirdeği, aynı sayfayı ve aynı C# köprüsünü kullanır. İçerik (HUD kiti) `../MHud`'dan gelir.
 
 ## Mimari
 
 ```text
-GTA5.exe
- ├─ ScriptHookV ── Present callback ──► StreamEmber.Overlay.GTAV.asi   (backends/gtav-d3d11)
+GTA5.exe / RDR2.exe
+ ├─ GTA V: ScriptHookV ── Present callback ──► StreamEmber.Overlay.GTAV.asi   (backends/gtav-d3d11)
+ ├─ RDR2:  MinHook ── IDXGISwapChain::Present ──► StreamEmber.Overlay.RDR2.asi (backends/rdr2-d3d12, D3D11On12)
  │                                         │ D3D11: kareyi texture'a yükle, oyunun üstüne çiz
  │                                         │ WndProc: kısayollar, menü modunda fare/klavye → UI
  │                                         ▼ LoadLibrary
  │                                    StreamEmber.Overlay.dll          (core, C ABI: include/se_overlay.h)
  │                                         │ CEF tarayıcı süreci tarafı, OnPaint → BGRA kare
  │                                         │ JSON kuyrukları (oyun ⇄ sayfa)
- ├─ SHVDN scriptleri ── P/Invoke ──► StreamEmber.Overlay.Bridge.dll   (bridge, oyundan bağımsız C#)
+ ├─ SHVDN / SHRDRDN scriptleri ── P/Invoke ──► StreamEmber.Overlay.Bridge.dll   (bridge, oyundan bağımsız C#)
  │
  └─ alt süreçler: StreamEmber.Overlay.Host.exe (renderer: window.streamember köprüsü, GPU, utility)
 ```
@@ -35,14 +36,18 @@ Kurallar:
 include/se_overlay.h        çekirdeğin C ABI'si (backend'ler + C# köprüsü bunu kullanır)
 core/                       StreamEmber.Overlay.dll — CEF başlatma, OnPaint, girdi, mesaj kuyrukları
 host/                       StreamEmber.Overlay.Host.exe — CEF alt süreci, JS köprüsü (window.streamember)
-backends/gtav-d3d11/        StreamEmber.Overlay.GTAV.asi — Present callback, D3D11 çizim, WndProc
+backends/common/            backend ortak kodu: overlay.ini, çekirdeği yükleme, WndProc girdi kancası, D3D11 çizici
+backends/gtav-d3d11/        StreamEmber.Overlay.GTAV.asi — ScriptHookV Present callback, oyunun D3D11 cihazı
+backends/rdr2-d3d12/        StreamEmber.Overlay.RDR2.asi — kendi DXGI/D3D12 kancaları (MinHook), D3D11On12
 bridge/                     StreamEmber.Overlay.Bridge (net48) — scriptler için C# sarmalayıcı
 ui/index.html               test sayfası (aşama 2-3)
 samples/gtav/OverlayDemo.3.cs  ilk köprü test scripti (aşama 3, artık kurulmuyor)
-samples/gtav/TrainerDemo/     MHud trainer + performans testi (StreamEmber.TrainerDemo.dll)
+samples/common/              trainer'ların oyundan bağımsız kısmı: JSON, MHud mesajları, menü, dünya etiketi motoru
+samples/gtav/TrainerDemo/     GTA V trainer + performans testi (StreamEmber.TrainerDemo.dll)
+samples/rdr2/TrainerDemo/     RDR2 trainer + performans testi (StreamEmber.Rdr2TrainerDemo.dll)
 ui/trainer/                 MHud sayfası için adaptör + performans paneli
 overlay.ini                 oyundaki ayar dosyasının şablonu
-build.ps1                   CEF indir + derle + dist\ + (-Deploy) oyuna kur
+build.ps1                   CEF indir + derle + dist\GTAV, dist\RDR2 + (-Deploy [-Game RDR2]) oyuna kur
 cef.lock                    sabitlenmiş CEF sürümü (ilk derlemede oluşur, commit edilir)
 third_party/cef/  build/  dist/   (git dışı)
 ```
@@ -56,21 +61,27 @@ GTA V\StreamEmber\Overlay\   StreamEmber.Overlay.dll, StreamEmber.Overlay.Host.e
 GTA V\scripts\               StreamEmber.Overlay.Bridge.dll, StreamEmber.TrainerDemo.dll
 ```
 
+RDR2'de aynı düzen: `StreamEmber.Overlay.RDR2.asi`, `StreamEmber\Overlay\`, `scripts\` (Bridge + `StreamEmber.Rdr2TrainerDemo.dll`).
+
 ## Derleme
 
 Ön koşullar: Visual Studio 2022+ ("Desktop development with C++" + "C++ CMake tools"), .NET SDK,
 `../GTAVScriptHookRuntime` (ScriptHookV SDK'sı oradan alınır), `../MHud` (trainer arayüzü),
-`../GTAVScriptHook/lib/ScriptHookVDotNet3.dll` (trainer derleme başvurusu), cef-builds.spotifycdn.com erişimi.
+`../GTAVScriptHookRuntime/bin/Release/ScriptHookVDotNet3.dll` (GTA trainer başvurusu),
+`../RDR2ScriptHookRuntime/bin/Release/ScriptHookRDRNetAPI.dll` (RDR2 trainer başvurusu; yoksa RDR2 trainer atlanır),
+cef-builds.spotifycdn.com ve github.com (MinHook, CMake FetchContent) erişimi.
 
 ```powershell
 .\build.ps1                    # CEF indir (ilk sefer ~150 MB), derle, dist\ hazırla
 .\build.ps1 -Deploy            # + oyuna kur (GTAV_GAME_PATH ya da GTAV_SCRIPT_PATH'in üst klasörü)
 .\build.ps1 -Deploy -GamePath "D:\EpicGames\GTAV"
+.\build.ps1 -Deploy -Game RDR2 -GamePath "...\steamapps\common\Red Dead Redemption 2"   # ya da RDR2_GAME_PATH
 .\build.ps1 -UpdateCef         # desteklenen aralıktaki (152-156) en yeni stable CEF'e geç
 .\build.ps1 -Deploy -ResetConfig   # oyundaki overlay.ini'yi şablonla değiştir (StartUrl=mhud/trainer.html)
 ```
 
-Oyunda gerekenler: ScriptHookV + bizim SHVDN fork'umuz (`../GTAVScriptHookRuntime`), GTA V **Legacy**.
+Oyunda gerekenler: GTA V **Legacy** + ScriptHookV + bizim SHVDN fork'umuz (`../GTAVScriptHookRuntime`);
+RDR2 **DirectX 12** modunda + ScriptHookRDR2 (dinput8.dll ASI yükleyicisiyle) + bizim fork'umuz (`../RDR2ScriptHookRuntime`).
 
 ## Test adımları
 
@@ -149,15 +160,17 @@ artık kurulmaz; kurulum eski kopyayı `.disabled` yapar.
 
 | # | Konu | Durum |
 |---|---|---|
-| 0 | SHVDN fork'unu derleyip oyunda doğrulama | bekliyor (`../GTAVScriptHookRuntime`) |
-| 1 | D3D11 çizim boru hattı, durum kaydet/geri yükle, test deseni | kod hazır, oyunda test bekliyor |
-| 2 | CEF offscreen (CPU/OnPaint yolu), host süreci | kod hazır, oyunda test bekliyor |
+| 0 | SHVDN fork'unu derleyip oyunda doğrulama | tamam (`../GTAVScriptHookRuntime`) |
+| 1 | D3D11 çizim boru hattı, durum kaydet/geri yükle, test deseni | tamam (GTA V) |
+| 2 | CEF offscreen (CPU/OnPaint yolu), host süreci | tamam (GTA V); kare senkronlu atlas oyunda kalibrasyon bekliyor |
 | 2b | GPU paylaşımlı texture (`OnAcceleratedPaint`), kopyasız | sonra |
 | 3 | JSON köprüsü (JS ⇄ C#), C# köprü kütüphanesi | kod hazır, oyunda test bekliyor |
 | 4 | Girdi: menü/HUD modu, imleç, oyun kontrollerini kapatma | temel hali hazır; oyunda ayar gerekecek |
 | 5 | MHud entegrasyonu, StreamEmber.Core'a köprü | sonra |
 | 6 | Sağlamlık: duraklatma/yükleme ekranında gizleme, kapanış, bellek/FPS ölçümü | sonra |
 | 7 | Depot paketi | sonra |
+| R1 | RDR2: SHRDRDN fork'u (`../RDR2ScriptHookRuntime`) | kod hazır, oyunda test bekliyor |
+| R2 | RDR2: DX12 backend (MinHook + D3D11On12) + RDR2 trainer | kod hazır, oyunda test bekliyor |
 
 ## Sayfa API'si (JS)
 
@@ -193,7 +206,24 @@ OverlayBridge.InputMode = OverlayInputMode.Ui;   // menü modu; Tick'te oyun kon
 - Sayfa yüklenmeden gönderilen mesajlar (en fazla 256) bekletilir ve sayfa yüklenince iletilir.
 - Yalnız tek oyunculu mod. ScriptHookV online'da çalışmaz.
 
-## RDR2 notu
+## RDR2 backend'i (backends/rdr2-d3d12)
 
-RDR2 Vulkan ya da DX12 kullanır. `backends/rdr2-*` aynı çekirdeği yükleyip yalnız çizim katmanını ve oyuna bağlanma
-noktasını yeniden yazacak. ScriptHookRDR2'de Present benzeri bir callback olup olmadığı o aşamada kontrol edilecek.
+ScriptHookRDR2 SDK'sında ScriptHookV'deki gibi bir Present callback yok; backend DXGI/D3D12'ye kendisi bağlanır:
+
+- ASI yüklenince bir iş parçacığında atılacak bir D3D12 cihazı + swap chain oluşturur, vtable'dan adresleri alır ve
+  MinHook ile `IDXGISwapChain::Present/Present1`, `ResizeBuffers/ResizeBuffers1`, `ID3D12CommandQueue::ExecuteCommandLists`
+  kancalarını kurar.
+- Oyunun DIRECT kuyruğu ExecuteCommandLists'ten öğrenilir (Present'i çağıran iş parçacığının son kuyruğu, cihazı
+  swap chain'inkiyle aynı olmalı). Bu kuyrukta `D3D11On12` cihazı açılır; back buffer'lar sarılıp ortak D3D11
+  çizicisi (`backends/common`) aynen kullanılır, `Flush` işi oyunun Present'inden önce kuyruğa koyar.
+- ResizeBuffers'tan önce sarılı back buffer'lar bırakılır. Çizimde yapılandırılmış istisna (SEH) olursa overlay o oturum
+  için kapanır, oyun çalışmaya devam eder.
+- **Vulkan desteklenmiyor**: 3 dk içinde hiç DXGI Present görülmezse `rdr2-backend.log`'a "Grafik API'sini DirectX 12
+  yapın" yazılır. HDR (R16G16B16A16_FLOAT back buffer) açıkken renkler soluk görünür (logda belirtilir).
+- Loglar: `RDR2\StreamEmber\Overlay\logs\rdr2-backend.log`, `overlay.log`, `cef.log`.
+
+RDR2 trainer (`samples/rdr2/TrainerDemo`) GTA'dakiyle aynı sayfa ve protokolü kullanır; dünya etiketi motoru ortak
+(`samples/common/WorldTags.cs`, oyun tarafı `RdrTagWorld`). Farklar: atlar/arabalar/kayıklar, kasabalar, karakter
+modelleri; HUD'da çekirdekler (can/dayanıklılık/dead eye) ve para; native referans olarak oyunun 3B çizdiği küreler
+(RDR2'de SET_DRAW_ORIGIN yok). F5 menü, F7/F8 overlay kısayolları. ScriptHookRDRDotNet konsolu F4'tedir
+(`../RDR2ScriptHookRuntime/ScriptHookRDRDotNet.ini`), F8 overlay'e ayrıldı.

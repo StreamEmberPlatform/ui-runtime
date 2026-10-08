@@ -1,4 +1,5 @@
-// StreamEmber Overlay — GTA V (D3D11) renderer. Runs only inside ScriptHookV's IDXGISwapChain::Present callback.
+// StreamEmber Overlay — D3D11 renderer shared by the backends. Runs on the game's render thread, right before
+// the swap chain presents: GTA V (native D3D11) and RDR2 (D3D12 through D3D11On12).
 #pragma once
 
 #include <d3d11.h>
@@ -8,15 +9,27 @@
 
 #include "backend_common.h"
 
-namespace seo_gtav {
+namespace seo_backend {
 
 class Renderer {
  public:
-  // Draws the overlay onto the swap chain's back buffer. Never throws; on any failure it logs and skips the frame.
-  void OnPresent(IDXGISwapChain* swapChain);
+  // Binds the renderer to a device (takes its own reference). A different device than last time releases and
+  // recreates every resource. Returns false if the renderer cannot draw on this device.
+  bool SetDevice(ID3D11Device* device);
+  // Once per frame, before any render target is created: keeps the core's view at the back buffer size and
+  // uploads the newest UI frame. Returns true if something has to be drawn this frame.
+  bool BeginFrame(int width, int height);
+  // Draws the overlay onto rtv (a back buffer of the size given to BeginFrame). preserveState saves and restores
+  // the context's pipeline state (required when the context is the game's own immediate context).
+  // Never throws; on any failure it logs and skips the frame.
+  void Draw(ID3D11RenderTargetView* rtv, bool preserveState);
+  // Releases every resource and the device reference.
+  void Reset() { ReleaseAll(); }
+
+  // Format to use for an RTV on a back buffer (typeless formats resolved to their UNORM/FLOAT variant).
+  static DXGI_FORMAT RenderTargetFormat(DXGI_FORMAT format);
 
  private:
-  bool EnsureResources(IDXGISwapChain* swapChain);
   void ReleaseAll();
   bool CreatePipeline();
   bool CreateStaticTextures();
@@ -27,7 +40,7 @@ class Renderer {
   void DrawQuad(ID3D11ShaderResourceView* srv, bool swizzle, float left, float top, float right, float bottom,
                 float u0 = 0.0f, float v0 = 0.0f, float u1 = 1.0f, float v1 = 1.0f, float alpha = 1.0f);
 
-  ID3D11Device* device_ = nullptr;           // not owned beyond the frame check (we AddRef via GetDevice)
+  ID3D11Device* device_ = nullptr;           // owned reference
   ID3D11DeviceContext* context_ = nullptr;
   ID3D11VertexShader* vs_ = nullptr;
   ID3D11PixelShader* ps_ = nullptr;
@@ -52,7 +65,10 @@ class Renderer {
 
   int width_ = 0;
   int height_ = 0;
+  bool drawUi_ = false;          // decided in BeginFrame, used by Draw
+  bool drawTest_ = false;
+  bool drawCursor_ = false;
   bool failed_ = false;          // pipeline creation failed permanently for this device
 };
 
-}  // namespace seo_gtav
+}  // namespace seo_backend

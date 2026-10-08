@@ -1,4 +1,5 @@
-// StreamEmber Overlay — GTA V (D3D11) backend: shared declarations.
+// StreamEmber Overlay — game backends: shared declarations (config, core loading, overlay state, logging).
+// Used by every backend (gtav-d3d11, rdr2-d3d12); nothing here is game specific.
 #pragma once
 
 #include <windows.h>
@@ -8,7 +9,7 @@
 
 #include "se_overlay.h"
 
-namespace seo_gtav {
+namespace seo_backend {
 
 struct Config {
   bool enabled = true;
@@ -44,7 +45,15 @@ struct CoreApi {
   SEO_GetSprites_t GetSprites = nullptr;
 };
 
-// Backend globals (defined in backend.cpp)
+// --- Startup (backend_base.cpp) -------------------------------------------------------------------------------
+// Reads <game folder>\StreamEmber\Overlay\overlay.ini and opens logs\<logName>. Call once, from the render thread
+// on the first presented frame (not from DllMain). Returns false when the overlay is disabled (Enabled=0).
+bool BackendStartup(HMODULE module, const wchar_t* logName, const char* displayName);
+// Hooks the game window and (unless TestPattern=1) loads the core on a worker thread. Call once after
+// BackendStartup with the swap chain's window and back buffer size.
+void BackendAttach(HWND window, int width, int height);
+
+// Backend globals (defined in backend_base.cpp)
 const Config& GetConfig();
 const std::wstring& GetBaseDir();
 // Non-null once the core DLL is loaded and SEO_Initialize was called
@@ -67,4 +76,4 @@ extern std::atomic<int> g_backBufferHeight;
 extern std::atomic<int> g_cursorX;
 extern std::atomic<int> g_cursorY;
 
-}  // namespace seo_gtav
+}  // namespace seo_backend
