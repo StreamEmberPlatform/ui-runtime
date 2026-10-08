@@ -104,6 +104,7 @@ std::atomic<unsigned long long> g_drawCount{0};
 std::atomic<DWORD> g_lastPresentThread{0};
 std::atomic<unsigned long long> g_lastHeartbeat{0};
 volatile LONG g_failedPresents = 0;
+std::atomic<long> g_lastPresentStatus{0};  // last non-failure Present result (S_OK, DXGI_STATUS_OCCLUDED, ...)
 
 void Diag(const char* format, ...) {
   if (g_diag == INVALID_HANDLE_VALUE || InterlockedIncrement(&g_diagLines) > kMaxDiagLines) {
@@ -220,6 +221,28 @@ struct D3D12State {
 
 D3D12State g_state;
 HWND g_window = nullptr;      // the one window we draw on (set on the first D3D12 Present)
+
+// Window state for "the game runs but nothing is on screen" reports (hung / hidden / minimized / layered window).
+void DiagWindow(const char* when) {
+  HWND window = g_window;
+  if (window == nullptr || !IsWindow(window)) {
+    Diag("window (%s): none", when);
+    return;
+  }
+  RECT rect = {};
+  GetWindowRect(window, &rect);
+  const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
+  const LONG_PTR exStyle = GetWindowLongPtrW(window, GWL_EXSTYLE);
+  BYTE alpha = 255;
+  DWORD layeredFlags = 0;
+  COLORREF key = 0;
+  if ((exStyle & WS_EX_LAYERED) != 0) GetLayeredWindowAttributes(window, &key, &alpha, &layeredFlags);
+  Diag("window (%s): visible %d, minimized %d, hung %d, foreground %d, rect %ld,%ld %ldx%ld, style 0x%08lX, "
+       "exstyle 0x%08lX, layered alpha %u",
+       when, IsWindowVisible(window) ? 1 : 0, IsIconic(window) ? 1 : 0, IsHungAppWindow(window) ? 1 : 0,
+       GetForegroundWindow() == window ? 1 : 0, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+       static_cast<unsigned long>(style), static_cast<unsigned long>(exStyle), static_cast<unsigned>(alpha));
+}
 Renderer* g_renderer = nullptr;
 bool g_backendStarted = false;
 std::atomic<bool> g_backendDisabled{false};
@@ -546,10 +569,19 @@ void PresentBookkeeping() {
   if (now - last >= 30000 && g_lastHeartbeat.compare_exchange_strong(last, now)) {
     Diag("heartbeat: presents %lu, overlay draws %lu, disabled %d", static_cast<unsigned long>(presents),
          static_cast<unsigned long>(g_drawCount.load()), g_backendDisabled ? 1 : 0);
+    DiagWindow("heartbeat");
   }
 }
 
 void AfterPresent(IDXGISwapChain* swapChain, HRESULT hr) {
+  // Success codes matter too: DXGI_STATUS_OCCLUDED etc. mean the frame was not shown
+  if (SUCCEEDED(hr)) {
+    const long previous = g_lastPresentStatus.exchange(static_cast<long>(hr));
+    if (previous != static_cast<long>(hr)) {
+      Diag("Present status 0x%08lX -> 0x%08lX", static_cast<unsigned long>(previous), static_cast<unsigned long>(hr));
+      DiagWindow("present status changed");
+    }
+  }
   if (FAILED(hr) && InterlockedIncrement(&g_failedPresents) <= 20) {
     unsigned long reason = 0;
     ID3D12Device* device12 = nullptr;
