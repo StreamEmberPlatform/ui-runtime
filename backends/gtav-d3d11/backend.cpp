@@ -119,7 +119,9 @@ void LoadCore(int width, int height) {
             Resolve(module, "SEO_SendMouseMove", api.SendMouseMove) &&
             Resolve(module, "SEO_SendMouseButton", api.SendMouseButton) &&
             Resolve(module, "SEO_SendMouseWheel", api.SendMouseWheel) && Resolve(module, "SEO_SendKey", api.SendKey) &&
-            Resolve(module, "SEO_SetFocus", api.SetFocus) && Resolve(module, "SEO_Log", api.Log);
+            Resolve(module, "SEO_SetFocus", api.SetFocus) && Resolve(module, "SEO_Log", api.Log) &&
+            Resolve(module, "SEO_GetAtlasLayout", api.GetAtlasLayout) &&
+            Resolve(module, "SEO_GetSprites", api.GetSprites);
   if (!ok) {
     return;
   }

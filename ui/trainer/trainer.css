@@ -16,3 +16,8 @@ body.x-menu-open .x-hint { opacity: 0; }
 
 /* World tags can number in the hundreds here; keep the menu and the panel above them */
 #menu-host, .x-perf-anchor { z-index: 1000; }
+
+/* Atlas: below the visible screen; each slot holds one MHud tag anchored to its bottom center */
+.x-atlas { position: absolute; left: 0; pointer-events: none; }
+.x-slot { position: absolute; overflow: hidden; }
+.x-slot > .mh-tag { position: absolute; left: 0; top: 0; }

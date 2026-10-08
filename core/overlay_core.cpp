@@ -57,6 +57,18 @@ struct Shared {
   int frameWidth = 0;
   int frameHeight = 0;
   uint64_t frameSerial = 0;
+  // Union of painted areas not yet handed to the backend (empty when dirtyRight <= dirtyLeft)
+  int dirtyLeft = 0, dirtyTop = 0, dirtyRight = 0, dirtyBottom = 0;
+
+  // Sprite atlas (API 2)
+  std::mutex atlasMutex;
+  SEO_AtlasLayout atlasRequested = {0, 0, 0, 0};
+  SEO_AtlasLayout atlas = {0, 0, 0, 0};  // effective: requested, clamped to the current screen
+  std::atomic<int> atlasHeight{0};  // rows * slotHeight, added below the screen in GetViewRect
+  std::mutex spriteMutex;
+  std::vector<SEO_Sprite> spriteRing[4];
+  uint64_t spriteSubmissions = 0;
+  std::atomic<int> spriteDelay{0};
 
   std::mutex inboxMutex;
   std::deque<std::string> inbox;
@@ -116,6 +128,37 @@ void PostUi(std::function<void()> fn) {
     return;
   }
   CefPostTask(TID_UI, new FnTask(std::move(fn)));
+}
+
+// Recomputes the effective atlas layout from the requested one and the current screen size.
+// Columns never exceed the screen width; the whole view stays within 8192 px (D3D11 texture limit).
+void UpdateEffectiveAtlas() {
+  SEO_AtlasLayout next = {0, 0, 0, 0};
+  {
+    std::lock_guard<std::mutex> lock(S().atlasMutex);
+    const SEO_AtlasLayout& r = S().atlasRequested;
+    if (r.rows > 0 && r.columns > 0 && r.slotWidth > 0 && r.slotHeight > 0) {
+      next = r;
+      next.slotWidth = std::min(next.slotWidth, 2048);
+      next.slotHeight = std::min(next.slotHeight, 1024);
+      const int screenWidth = std::max(1, S().viewWidth.load());
+      next.columns = std::max(1, std::min(next.columns, screenWidth / next.slotWidth));
+      const int maxRows = std::max(1, (8192 - S().viewHeight.load()) / next.slotHeight);
+      next.rows = std::min(next.rows, maxRows);
+    }
+    if (std::memcmp(&S().atlas, &next, sizeof(next)) == 0) {
+      return;
+    }
+    S().atlas = next;
+  }
+  S().atlasHeight.store(next.rows * next.slotHeight);
+  LogInfo("Atlas: " + std::to_string(next.columns) + "x" + std::to_string(next.rows) + " slots of " +
+          std::to_string(next.slotWidth) + "x" + std::to_string(next.slotHeight) + " px.");
+  PostUi([]() {
+    if (CefRefPtr<CefBrowser> browser = GetBrowser()) {
+      browser->GetHost()->WasResized();
+    }
+  });
 }
 
 // UI thread only
@@ -228,7 +271,8 @@ class OverlayClient : public CefClient,
 
   // CefRenderHandler
   void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
-    rect = CefRect(0, 0, std::max(1, S().viewWidth.load()), std::max(1, S().viewHeight.load()));
+    // The atlas area (if any) lies below the visible screen
+    rect = CefRect(0, 0, std::max(1, S().viewWidth.load()), std::max(1, S().viewHeight.load() + S().atlasHeight.load()));
   }
 
   void OnPaint(CefRefPtr<CefBrowser> browser,
@@ -241,14 +285,43 @@ class OverlayClient : public CefClient,
       return;  // popups (<select> dropdowns) are not composited yet
     }
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    const size_t stride = static_cast<size_t>(width) * 4;
     std::lock_guard<std::mutex> lock(S().frameMutex);
-    if (S().pixels.size() != bytes) {
-      S().pixels.resize(bytes);
+    Shared& sh = S();
+    const bool sizeChanged = sh.pixels.size() != bytes || sh.frameWidth != width || sh.frameHeight != height;
+    if (sizeChanged) {
+      // New size: the whole buffer is valid and dirty
+      sh.pixels.resize(bytes);
+      std::memcpy(sh.pixels.data(), buffer, bytes);
+      sh.frameWidth = width;
+      sh.frameHeight = height;
+      sh.dirtyLeft = 0;
+      sh.dirtyTop = 0;
+      sh.dirtyRight = width;
+      sh.dirtyBottom = height;
+    } else {
+      // Copy only what Chromium repainted (static HUD + a few changing widgets = small copies)
+      const auto* src = static_cast<const uint8_t*>(buffer);
+      for (const CefRect& r : dirtyRects) {
+        const int x0 = std::max(0, r.x), y0 = std::max(0, r.y);
+        const int x1 = std::min(width, r.x + r.width), y1 = std::min(height, r.y + r.height);
+        if (x1 <= x0 || y1 <= y0) continue;
+        const size_t rowBytes = static_cast<size_t>(x1 - x0) * 4;
+        for (int y = y0; y < y1; ++y) {
+          const size_t offset = static_cast<size_t>(y) * stride + static_cast<size_t>(x0) * 4;
+          std::memcpy(sh.pixels.data() + offset, src + offset, rowBytes);
+        }
+        if (sh.dirtyRight <= sh.dirtyLeft) {
+          sh.dirtyLeft = x0; sh.dirtyTop = y0; sh.dirtyRight = x1; sh.dirtyBottom = y1;
+        } else {
+          sh.dirtyLeft = std::min(sh.dirtyLeft, x0);
+          sh.dirtyTop = std::min(sh.dirtyTop, y0);
+          sh.dirtyRight = std::max(sh.dirtyRight, x1);
+          sh.dirtyBottom = std::max(sh.dirtyBottom, y1);
+        }
+      }
     }
-    std::memcpy(S().pixels.data(), buffer, bytes);
-    S().frameWidth = width;
-    S().frameHeight = height;
-    S().frameSerial++;
+    sh.frameSerial++;
   }
 
   // CefDisplayHandler
@@ -499,6 +572,7 @@ SEO_API void SEO_CALL SEO_Resize(int32_t width, int32_t height) {
   if (!widthChanged && !heightChanged) {
     return;
   }
+  UpdateEffectiveAtlas();
   PostUi([]() {
     if (CefRefPtr<CefBrowser> browser = GetBrowser()) {
       browser->GetHost()->WasResized();
@@ -515,11 +589,21 @@ SEO_API int32_t SEO_CALL SEO_AcquireFrame(SEO_Frame* outFrame, uint64_t lastSeri
     S().frameMutex.unlock();
     return 0;
   }
-  outFrame->pixels = S().pixels.data();
-  outFrame->width = S().frameWidth;
-  outFrame->height = S().frameHeight;
-  outFrame->stride = S().frameWidth * 4;
-  outFrame->serial = S().frameSerial;
+  Shared& sh = S();
+  outFrame->pixels = sh.pixels.data();
+  outFrame->width = sh.frameWidth;
+  outFrame->height = sh.frameHeight;
+  outFrame->stride = sh.frameWidth * 4;
+  outFrame->serial = sh.frameSerial;
+  if (sh.dirtyRight > sh.dirtyLeft && sh.dirtyBottom > sh.dirtyTop) {
+    outFrame->dirtyX = sh.dirtyLeft;
+    outFrame->dirtyY = sh.dirtyTop;
+    outFrame->dirtyWidth = sh.dirtyRight - sh.dirtyLeft;
+    outFrame->dirtyHeight = sh.dirtyBottom - sh.dirtyTop;
+  } else {
+    outFrame->dirtyX = outFrame->dirtyY = outFrame->dirtyWidth = outFrame->dirtyHeight = 0;
+  }
+  sh.dirtyLeft = sh.dirtyTop = sh.dirtyRight = sh.dirtyBottom = 0;  // handed over
   return 1;  // stays locked until SEO_ReleaseFrame
 }
 
@@ -664,6 +748,57 @@ SEO_API void SEO_CALL SEO_Log(const char* utf8Message) {
   if (utf8Message != nullptr) {
     Log("EXT", utf8Message);
   }
+}
+
+SEO_API void SEO_CALL SEO_SetAtlasLayout(const SEO_AtlasLayout* layout) {
+  SEO_AtlasLayout requested = {0, 0, 0, 0};
+  if (layout != nullptr && layout->rows > 0 && layout->columns > 0 && layout->slotWidth > 0 &&
+      layout->slotHeight > 0) {
+    requested = *layout;
+  }
+  {
+    std::lock_guard<std::mutex> lock(S().atlasMutex);
+    S().atlasRequested = requested;
+  }
+  UpdateEffectiveAtlas();
+}
+
+SEO_API int32_t SEO_CALL SEO_GetAtlasLayout(SEO_AtlasLayout* out) {
+  std::lock_guard<std::mutex> lock(S().atlasMutex);
+  if (out != nullptr) {
+    *out = S().atlas;
+  }
+  return S().atlas.rows > 0 ? 1 : 0;
+}
+
+SEO_API void SEO_CALL SEO_SubmitSprites(const SEO_Sprite* sprites, int32_t count) {
+  count = std::max(0, std::min(count, static_cast<int32_t>(SEO_MAX_SPRITES)));
+  std::lock_guard<std::mutex> lock(S().spriteMutex);
+  std::vector<SEO_Sprite>& slot = S().spriteRing[S().spriteSubmissions % 4];
+  slot.assign(sprites, sprites + (sprites != nullptr ? count : 0));
+  S().spriteSubmissions++;
+}
+
+SEO_API int32_t SEO_CALL SEO_GetSprites(SEO_Sprite* out, int32_t maxCount) {
+  std::lock_guard<std::mutex> lock(S().spriteMutex);
+  const uint64_t total = S().spriteSubmissions;
+  if (out == nullptr || maxCount <= 0 || total == 0) {
+    return 0;
+  }
+  const uint64_t delay = static_cast<uint64_t>(S().spriteDelay.load());
+  const uint64_t index = total - 1 - std::min<uint64_t>(delay, total - 1);
+  const std::vector<SEO_Sprite>& slot = S().spriteRing[index % 4];
+  const int32_t n = std::min(maxCount, static_cast<int32_t>(slot.size()));
+  std::memcpy(out, slot.data(), static_cast<size_t>(n) * sizeof(SEO_Sprite));
+  return n;
+}
+
+SEO_API void SEO_CALL SEO_SetSpriteDelay(int32_t frames) {
+  S().spriteDelay.store(std::max(0, std::min(3, static_cast<int>(frames))));
+}
+
+SEO_API int32_t SEO_CALL SEO_GetSpriteDelay(void) {
+  return S().spriteDelay.load();
 }
 
 }  // extern "C"

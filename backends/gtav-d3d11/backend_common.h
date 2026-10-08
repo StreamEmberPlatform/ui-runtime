@@ -40,6 +40,8 @@ struct CoreApi {
   SEO_SendKey_t SendKey = nullptr;
   SEO_SetFocus_t SetFocus = nullptr;
   SEO_Log_t Log = nullptr;
+  SEO_GetAtlasLayout_t GetAtlasLayout = nullptr;
+  SEO_GetSprites_t GetSprites = nullptr;
 };
 
 // Backend globals (defined in backend.cpp)

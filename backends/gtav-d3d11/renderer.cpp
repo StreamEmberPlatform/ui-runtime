@@ -30,7 +30,7 @@ cbuffer Params : register(b0)
 {
     float4 rect;     // left, top, right, bottom in NDC
     float4 uvRect;   // u0, v0, u1, v1
-    float4 options;  // x: 1 = swap red/blue
+    float4 options;  // x: 1 = swap red/blue, y: opacity
 };
 
 struct VSOut
@@ -54,7 +54,8 @@ SamplerState smp : register(s0);
 float4 PSMain(VSOut i) : SV_Target
 {
     float4 c = tex.Sample(smp, i.uv);
-    return options.x > 0.5 ? c.bgra : c;   // premultiplied alpha
+    c = options.x > 0.5 ? c.bgra : c;
+    return c * options.y;                  // premultiplied alpha: scale every channel
 }
 )HLSL";
 
@@ -422,9 +423,8 @@ bool Renderer::EnsureUiTexture(int width, int height) {
   desc.ArraySize = 1;
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
   desc.SampleDesc.Count = 1;
-  desc.Usage = D3D11_USAGE_DYNAMIC;
+  desc.Usage = D3D11_USAGE_DEFAULT;  // updated with UpdateSubresource, only the dirty part
   desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-  desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
   uiSwizzle_ = false;
   HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &uiTexture_);
   if (FAILED(hr)) {
@@ -444,6 +444,7 @@ bool Renderer::EnsureUiTexture(int width, int height) {
   }
   uiWidth_ = width;
   uiHeight_ = height;
+  uiNeedsFullUpload_ = true;
   return true;
 }
 
@@ -454,15 +455,23 @@ void Renderer::UploadUiFrame() {
     return;
   }
   if (EnsureUiTexture(frame.width, frame.height)) {
-    D3D11_MAPPED_SUBRESOURCE mapped = {};
-    if (SUCCEEDED(context_->Map(uiTexture_, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-      const size_t rowBytes = static_cast<size_t>(frame.width) * 4;
-      auto* dst = static_cast<uint8_t*>(mapped.pData);
-      for (int y = 0; y < frame.height; ++y) {
-        std::memcpy(dst + static_cast<size_t>(y) * mapped.RowPitch,
-                    frame.pixels + static_cast<size_t>(y) * frame.stride, rowBytes);
-      }
-      context_->Unmap(uiTexture_, 0);
+    int x = frame.dirtyX, y = frame.dirtyY, w = frame.dirtyWidth, h = frame.dirtyHeight;
+    if (uiNeedsFullUpload_) {
+      x = 0;
+      y = 0;
+      w = frame.width;
+      h = frame.height;
+    }
+    x = std::max(0, x);
+    y = std::max(0, y);
+    w = std::min(w, frame.width - x);
+    h = std::min(h, frame.height - y);
+    if (w > 0 && h > 0) {
+      D3D11_BOX box = {static_cast<UINT>(x), static_cast<UINT>(y), 0, static_cast<UINT>(x + w),
+                       static_cast<UINT>(y + h), 1};
+      const uint8_t* src = frame.pixels + static_cast<size_t>(y) * frame.stride + static_cast<size_t>(x) * 4;
+      context_->UpdateSubresource(uiTexture_, 0, &box, src, static_cast<UINT>(frame.stride), 0);
+      uiNeedsFullUpload_ = false;
       uiHasContent_ = true;
     }
   }
@@ -471,7 +480,7 @@ void Renderer::UploadUiFrame() {
 }
 
 void Renderer::DrawQuad(ID3D11ShaderResourceView* srv, bool swizzle, float left, float top, float right,
-                        float bottom) {
+                        float bottom, float u0, float v0, float u1, float v1, float alpha) {
   D3D11_MAPPED_SUBRESOURCE mapped = {};
   if (FAILED(context_->Map(constants_, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
     return;
@@ -483,11 +492,12 @@ void Renderer::DrawQuad(ID3D11ShaderResourceView* srv, bool swizzle, float left,
   c.rect[1] = 1.0f - top / h * 2.0f;
   c.rect[2] = right / w * 2.0f - 1.0f;
   c.rect[3] = 1.0f - bottom / h * 2.0f;
-  c.uv[0] = 0.0f;
-  c.uv[1] = 0.0f;
-  c.uv[2] = 1.0f;
-  c.uv[3] = 1.0f;
+  c.uv[0] = u0;
+  c.uv[1] = v0;
+  c.uv[2] = u1;
+  c.uv[3] = v1;
   c.options[0] = swizzle ? 1.0f : 0.0f;
+  c.options[1] = alpha;
   std::memcpy(mapped.pData, &c, sizeof(c));
   context_->Unmap(constants_, 0);
 
@@ -581,7 +591,12 @@ void Renderer::OnPresent(IDXGISwapChain* swapChain) {
 
   const float scale = std::max(1.0f, static_cast<float>(height_) / 1080.0f);
   if (drawUi) {
-    DrawQuad(uiSrv_, uiSwizzle_, 0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_));
+    // World-anchored sprites first (beneath the HUD/menus), then the screen part of the page.
+    DrawSprites(core);
+    // The view may be taller than the screen (atlas below it): sample only the screen part.
+    const float v1 = std::min(1.0f, static_cast<float>(height_) / static_cast<float>(std::max(1, uiHeight_)));
+    DrawQuad(uiSrv_, uiSwizzle_, 0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_), 0.0f, 0.0f, 1.0f,
+             v1);
   }
   if (drawTest) {
     const float x = 48.0f * scale;
@@ -596,6 +611,39 @@ void Renderer::OnPresent(IDXGISwapChain* swapChain) {
 
   backup.Restore(context_);
   rtv->Release();
+}
+
+void Renderer::DrawSprites(const CoreApi* core) {
+  SEO_AtlasLayout layout = {};
+  if (!core->GetAtlasLayout(&layout) || layout.rows <= 0 || layout.columns <= 0) {
+    return;
+  }
+  const int atlasTop = uiHeight_ - layout.rows * layout.slotHeight;  // atlas = bottom rows of the view
+  // The frame must have exactly screen + atlas height; otherwise it was painted before the layout took effect
+  // (or for another screen size) and its "atlas" rows would be something else.
+  if (atlasTop != height_ || layout.columns * layout.slotWidth > uiWidth_) {
+    return;
+  }
+  const int count = core->GetSprites(sprites_, SEO_MAX_SPRITES);
+  const int slots = layout.columns * layout.rows;
+  const float texW = static_cast<float>(uiWidth_);
+  const float texH = static_cast<float>(uiHeight_);
+  const float sw = static_cast<float>(layout.slotWidth);
+  const float sh = static_cast<float>(layout.slotHeight);
+  for (int i = 0; i < count; ++i) {
+    const SEO_Sprite& s = sprites_[i];
+    if (s.slot < 0 || s.slot >= slots || s.alpha <= 0.0f || s.scale <= 0.0f) {
+      continue;
+    }
+    const float px = static_cast<float>((s.slot % layout.columns) * layout.slotWidth);
+    const float py = static_cast<float>(atlasTop + (s.slot / layout.columns) * layout.slotHeight);
+    // Half-texel inset keeps linear filtering from bleeding the neighbouring slot in
+    const float u0 = (px + 0.5f) / texW, v0 = (py + 0.5f) / texH;
+    const float u1 = (px + sw - 0.5f) / texW, v1 = (py + sh - 0.5f) / texH;
+    const float w = sw * s.scale, h = sh * s.scale;
+    const float ax = s.x * static_cast<float>(width_), ay = s.y * static_cast<float>(height_);
+    DrawQuad(uiSrv_, uiSwizzle_, ax - w * 0.5f, ay - h, ax + w * 0.5f, ay, u0, v0, u1, v1, std::min(1.0f, s.alpha));
+  }
 }
 
 void Renderer::ReleaseAll() {
@@ -614,6 +662,7 @@ void Renderer::ReleaseAll() {
   SafeRelease(device_);
   uiWidth_ = uiHeight_ = 0;
   uiHasContent_ = false;
+  uiNeedsFullUpload_ = true;
   uiSerial_ = 0;
   failed_ = false;
 }

@@ -5,8 +5,10 @@
  *   - game -> page: window.streamember messages { action, data } are re-dispatched as window 'message' events,
  *     exactly like FiveM's SendNUIMessage, so MH.on('mhud:...') handlers in app.js receive them;
  *   - page -> game: MH.post(name, data) is routed to window.streamember.post({ cb: name, data }).
- * Adds: mouse clicks on the classic menu, keys forwarded by the game (F5 menu), a performance panel and
- * latency acknowledgements for the world tag messages.
+ * Adds: mouse clicks on the classic menu, keys forwarded by the game (F5 menu), a performance panel,
+ * latency acknowledgements for HTML-positioned tags and the sprite ATLAS for frame-synchronous world tags:
+ *   the browser view is taller than the screen; the area below the screen holds fixed slots. Each slot renders one
+ *   MHud tag (content only). The game draws the slots at the right screen positions itself, every frame.
  */
 (function () {
   'use strict';
@@ -46,6 +48,116 @@
     bridge.on(function (msg) { if (msg && typeof msg === 'object') dispatch(msg); });
   }
 
+  /* ---------------- Atlas (frame-synchronous world tags) ---------------- */
+  var atlas = { layout: null, heightDev: 0, screenHeightDev: 0, host: null, slots: [], pending: [], ackScheduled: false };
+
+  function zoom() { return parseFloat(document.documentElement.style.zoom) || 1; }
+  // Visible screen height in device pixels. With an atlas the browser view is taller than the screen.
+  function screenHeightDev() {
+    return atlas.layout ? atlas.screenHeightDev : window.innerHeight;
+  }
+
+  // MHud scales the HUD with zoom = innerHeight / 1080; base it on the screen, not the (taller) view
+  var scalers = [];
+  MH.autoScale = function (opts) {
+    opts = opts || {};
+    var base = opts.base || 1080, user = opts.scale || 1, target = MH.$(opts.target) || document.documentElement;
+    function apply() { target.style.zoom = (screenHeightDev() / base) * user; layoutAtlas(); }
+    apply();
+    window.addEventListener('resize', apply);
+    var scaler = { set: function (v) { user = v; apply(); }, apply: apply };
+    scalers.push(scaler);
+    return scaler;
+  };
+  function rescale() { if (scalers.length) scalers.forEach(function (x) { x.apply(); }); else layoutAtlas(); }
+
+  // Positions the HUD screen and every slot in CSS pixels (device pixels / zoom)
+  function layoutAtlas() {
+    var screen = document.getElementById('screen') || document.querySelector('.mh-screen');
+    var z = zoom(), L = atlas.layout;
+    if (screen) {
+      screen.style.bottom = L ? 'auto' : '';
+      screen.style.height = L ? (atlas.screenHeightDev / z) + 'px' : '';
+    }
+    if (!L || !atlas.host) return;
+    var sw = L.slotWidth / z, sh = L.slotHeight / z;
+    atlas.host.style.top = (atlas.screenHeightDev / z) + 'px';
+    atlas.host.style.width = (L.columns * sw) + 'px';
+    atlas.host.style.height = (L.rows * sh) + 'px';
+    atlas.slots.forEach(function (slot, i) {
+      slot.el.style.left = ((i % L.columns) * sw) + 'px';
+      slot.el.style.top = (Math.floor(i / L.columns) * sh) + 'px';
+      slot.el.style.width = sw + 'px';
+      slot.el.style.height = sh + 'px';
+    });
+  }
+
+  function resetAtlas(layout) {
+    if (atlas.host) atlas.host.remove();
+    atlas.host = null; atlas.slots = []; atlas.pending = [];
+    atlas.layout = layout || null;
+    atlas.screenHeightDev = layout ? layout.screenHeight : 0;
+    if (layout) {
+      atlas.host = document.createElement('div');
+      atlas.host.className = 'x-atlas';
+      for (var i = 0; i < layout.columns * layout.rows; i++) {
+        var el = document.createElement('div');
+        el.className = 'x-slot';
+        atlas.host.appendChild(el);
+        atlas.slots.push({ el: el, pool: null });
+      }
+      document.body.appendChild(atlas.host);
+    }
+    rescale();
+  }
+
+  // The page reports painted slot versions; the game only shows a slot once its content is in the frame.
+  function scheduleReadyAck() {
+    if (atlas.ackScheduled) return;
+    atlas.ackScheduled = true;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        atlas.ackScheduled = false;
+        var L = atlas.layout;
+        // Until Chromium has actually resized the view, the atlas rows are not painted yet
+        if (!L || window.innerHeight < L.screenHeight + L.rows * L.slotHeight) {
+          if (L && atlas.pending.length) setTimeout(scheduleReadyAck, 50);
+          return;
+        }
+        if (!atlas.pending.length) return;
+        var pairs = atlas.pending; atlas.pending = [];
+        MH.post('atlasReady', { s: pairs });
+      });
+    });
+  }
+
+  MH.on('trainer:atlas', function (d) {
+    if (d.reset) resetAtlas(d.layout && d.layout.rows > 0 ? d.layout : null);
+    var L = atlas.layout;
+    if (!L) return;
+    var z = zoom(), sw = L.slotWidth / z, sh = L.slotHeight / z;
+    (d.set || []).forEach(function (e) {
+      var slot = atlas.slots[e.slot];
+      if (!slot) return;
+      if (!slot.pool) slot.pool = MH.Nametags(slot.el);
+      var t = e.item;
+      // Same mapping as MHud's app.js 'mhud:nametags', anchored to the slot's bottom center at scale 1
+      t.id = 0;
+      t.x = sw / 2; t.y = sh - 2; t.scale = 1; t.alpha = 1;
+      t.sub = t.dist + ' M';
+      t.tone = t.tone || 'team1';
+      t.sig = [t.name, t.icon, t.tone, t.health, t.armor, t.dead, t.dist, t.compact].join('|');
+      slot.pool.update([t]);
+      atlas.pending.push(e.slot, e.ver);
+    });
+    (d.clear || []).forEach(function (i) {
+      var slot = atlas.slots[i];
+      if (slot && slot.pool) slot.pool.update([]);
+    });
+    if (atlas.pending.length) scheduleReadyAck();
+  });
+  window.addEventListener('resize', function () { if (atlas.pending.length) scheduleReadyAck(); });
+
   /* The script (re)started while the page was already loaded */
   MH.on('trainer:hello', function () { MH.post('ready', {}); });
 
@@ -68,7 +180,8 @@
   var ROWS = [
     ['gameFps', 'Oyun FPS'], ['pageFps', 'Sayfa FPS'], ['tags', 'Etiket'],
     ['tagRate', 'Etiket mesajı/sn (giden · gelen)'], ['dom', 'DOM ms (ort · maks)'],
-    ['rtt', 'Gidiş-dönüş gecikme'], ['cs', 'C# ms (etiket · tick)'], ['traffic', 'Mesaj/sn · KB/sn'],
+    ['mode', 'Konumlandırma'], ['rtt', 'HTML gidiş-dönüş gecikme'], ['content', 'Atlas içerik güncelleme/sn · slot'],
+    ['cs', 'C# ms (etiket · tick)'], ['traffic', 'Mesaj/sn · KB/sn'],
     ['cfg', 'Mesafe · sınır · sıklık · adım'], ['spin', 'Kamera dönüşü']
   ];
   var panel = document.createElement('div');
@@ -123,7 +236,9 @@
     set('gameFps', p.gameFps.toFixed(1));
     set('tags', String(p.tags));
     set('tagRate', p.tagMsgs + ' · ' + page.tagRate);
-    set('rtt', p.rttMs > 0 ? p.rttMs.toFixed(1) + ' ms · ' + p.rttFrames.toFixed(1) + ' kare' : '—');
+    set('mode', p.mode === 'atlas' ? 'atlas · gecikme ' + p.delay + ' · öngörü ' + p.predict : 'HTML');
+    set('rtt', p.mode === 'html' && p.rttMs > 0 ? p.rttMs.toFixed(1) + ' ms · ' + p.rttFrames.toFixed(1) + ' kare' : '—');
+    set('content', p.mode === 'atlas' ? p.contentUpdates + ' · ' + p.slots : '—');
     set('cs', p.collectMs.toFixed(2) + ' · ' + p.tickMs.toFixed(2));
     set('traffic', Math.round(p.msgs) + ' · ' + p.kbps.toFixed(1));
     set('cfg', p.radius + ' m · ' + p.max + ' · ' + (p.rate ? p.rate + ' Hz' : 'her kare') + ' · ' + p.distStep + ' m');

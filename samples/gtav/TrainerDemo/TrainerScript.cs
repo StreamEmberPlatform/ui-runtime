@@ -106,6 +106,7 @@ namespace StreamEmber.TrainerDemo
                     case "ready":
                         // app.js loaded (first time or after a page reload)
                         Ui.Ready = true;
+                        _tags.OnPageReady();
                         _hud.PushConfig();
                         _menus.Refresh();
                         break;
@@ -119,6 +120,9 @@ namespace StreamEmber.TrainerDemo
                         break;
                     case "ack":
                         _tags.OnAck((int)data.Num("seq"), Game.FrameCount);
+                        break;
+                    case "atlasReady":
+                        if (data != null && data.TryGetValue("s", out object pairs)) _tags.OnAtlasReady(pairs as List<object>);
                         break;
                 }
             }
@@ -152,6 +156,11 @@ namespace StreamEmber.TrainerDemo
                 .Prop("radius", (int)_tags.Radius)
                 .Prop("max", _tags.MaxCount)
                 .Prop("rate", _tags.RateHz)
+                .Prop("mode", _tags.Positioning == WorldTags.Mode.Atlas ? "atlas" : "html")
+                .Prop("delay", OverlayBridge.SpriteDelay)
+                .Prop("predict", _tags.PredictFrames)
+                .Prop("slots", _tags.AtlasSlots)
+                .Prop("contentUpdates", _tags.ContentUpdatesPerSecond)
                 .Prop("distStep", _tags.DistanceStep)
                 .Prop("refs", _tags.NativeReferences)
                 .Prop("spin", (int)_trainer.CameraSpinDegreesPerSecond)

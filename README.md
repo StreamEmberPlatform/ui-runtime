@@ -117,6 +117,26 @@ Performans testi, HUD (tema, bildirim vitrini).
   *mesafe yazısı adımı*.
 - Panel (sağ orta): oyun FPS, sayfa FPS, etiket sayısı, mesaj/sn, DOM süresi, C# süresi, KB/sn, gecikme.
 
+### Dünyaya bağlı arayüzde kare senkronu: sprite atlası (API 2)
+
+HTML ile konumlandırılan her şey (MHud/FiveM yolu) tarayıcı boru hattı yüzünden **3-6 kare geç** kalır:
+oyun karesi → JSON → CEF görevi → JS/DOM → Chromium raster (kendi 60 Hz saatiyle) → `OnPaint` → sonraki `Present`.
+Kamera hızlı dönerken etiketler kafalardan kayar. Bunu tarayıcıyı hızlandırarak çözmek mümkün değil; çözüm
+**konumu tarayıcıdan almak**:
+
+- CEF görünümü ekrandan uzundur; ekranın altındaki bölge **atlas**tır (`SEO_SetAtlasLayout`). Sayfa her etiketi bir
+  kez sabit bir slota çizer (yalnız içerik: ad, can barı, mesafe; değişince yeniden).
+- Oyun her karede hangi slotun ekranın neresine gideceğini **struct dizisi** olarak verir (`SEO_SubmitSprites`,
+  JSON/JS yok). Backend aynı karede slotları atlas'tan alıp o konumlara çizer, sonra HUD'u üstüne çizer.
+- Sayfa slotu boyadığını bildirmeden (`atlasReady`) oyun o slotu göstermez; yeni etiket birkaç kare sonra belirir,
+  ama hareket eden etiket hiç gecikmez.
+- Artık yalnız değişen bölgeler kopyalanır ve GPU'ya yüklenir (dirty rect), uzun görünüm ek maliyet getirmez.
+
+**Kalibrasyon** (trainer → Performans testi): *Native referans noktaları*'nı aç (oyun, en yakın 30 varlığın çapasına
+`SET_DRAW_ORIGIN` ile kendisi çizer = gerçek konum), *Kamerayı döndür* 90°/sn. Etiketin alt ucu noktada durmalı.
+Etiketler noktaların önünde gidiyorsa *Senkron gecikmesi* = 1 kare; arkasından geliyorsa *Öngörü* = 1 kare.
+*Konumlandırma*'yı HTML'e alarak eski yolla farkı görebilirsin.
+
 **Bulgu (headless Chromium, 150 etiket):** yalnız konum değişince güncelleme **~1 ms**; mesafe yazısı her mesajda
 değişince **~22 ms** (60 Hz'de karşılanamaz). Sebep: MHud `app.js` etiket imzasına (`sig`) mesafeyi koyuyor, imza
 değişince `MH.Nametags` etiketin HTML'ini baştan yazıyor. Trainer mesafeyi varsayılan 5 m adımla yuvarlar

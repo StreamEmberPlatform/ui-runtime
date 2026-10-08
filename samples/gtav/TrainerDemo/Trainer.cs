@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using GTA;
 using GTA.Math;
+using StreamEmber.Overlay;
 
 namespace StreamEmber.TrainerDemo
 {
@@ -81,6 +82,9 @@ namespace StreamEmber.TrainerDemo
         private static readonly string[] RateOptions = { "Her kare", "30 Hz", "15 Hz" };
         private static readonly int[] RateValues = { 0, 30, 15 };
         private static readonly string[] TargetOptions = { "Hepsi", "Yalnız yayalar", "Yalnız araçlar" };
+        private static readonly string[] PositioningOptions = { "Atlas (kare senkron)", "HTML (MHud/FiveM yolu)" };
+        private static readonly string[] DelayOptions = { "0 kare", "1 kare", "2 kare" };
+        private static readonly string[] PredictOptions = { "Kapalı", "1 kare" };
         private static readonly string[] DistStepOptions = { "1 m (MHud varsayılanı)", "5 m", "10 m" };
         private static readonly int[] DistStepValues = { 1, 5, 10 };
         private static readonly string[] SpinOptions = { "Kapalı", "45°/sn", "90°/sn", "180°/sn" };
@@ -171,11 +175,19 @@ namespace StreamEmber.TrainerDemo
                 _tags.Enabled = it.Check == true;
                 if (!_tags.Enabled) _tags.Clear();
             });
-            perf.Toggle("Native referans noktaları", "Oyunun kendi çizdiği kırmızı noktalar. Etiketin alt ucu noktada durmalı; " +
-                "dönerken aradaki kayma gecikmeyi gösterir.", _tags.NativeReferences, it => _tags.NativeReferences = it.Check == true);
+            perf.Choice("Konumlandırma", "Atlas: etiketi oyun kendi karesinde yerleştirir (gecikmesiz). HTML: konum sayfaya " +
+                "gider, MHud DOM'u taşır (FiveM yolu, birkaç kare gecikir). Karşılaştırmak için değiştir.", PositioningOptions, 0,
+                it => _tags.Positioning = (WorldTags.Mode)it.Index);
+            perf.Toggle("Native referans noktaları", "Oyunun dünya koordinatından kendisinin çizdiği kırmızı noktalar (en yakın 30). " +
+                "Etiketin alt ucu noktada durmalı; dönerken aradaki kayma gecikmedir.", _tags.NativeReferences,
+                it => _tags.NativeReferences = it.Check == true);
+            perf.Choice("Senkron gecikmesi (atlas)", "Etiketler noktaların ÖNÜNDE gidiyorsa 1 kare yap. Noktalarla birebir oturan değeri seç.",
+                DelayOptions, 0, it => OverlayBridge.SpriteDelay = it.Index);
+            perf.Choice("Öngörü (atlas)", "Etiketler noktaların ARKASINDAN geliyorsa aç: ekran hızından 1 kare ileri tahmin.",
+                PredictOptions, 0, it => _tags.PredictFrames = it.Index);
             perf.Choice("Mesafe", "Etiket yarıçapı. En büyük maliyet kaldıracı.", RadiusOptions, 2, it => _tags.Radius = RadiusValues[it.Index]);
             perf.Choice("En fazla etiket", "", MaxOptions, 2, it => _tags.MaxCount = MaxValues[it.Index]);
-            perf.Choice("Gönderim sıklığı", "Etiket mesajı her karede mi, daha seyrek mi gitsin.", RateOptions, 0, it => _tags.RateHz = RateValues[it.Index]);
+            perf.Choice("Gönderim sıklığı (HTML)", "HTML modunda etiket mesajı her karede mi, daha seyrek mi gitsin.", RateOptions, 0, it => _tags.RateHz = RateValues[it.Index]);
             perf.Choice("Hedef", "", TargetOptions, 0, it => _tags.Target = (WorldTags.Filter)it.Index);
             perf.Choice("Mesafe yazısı adımı", "MHud mesafe yazısı değişince etiketi baştan çizer. 1 m: her harekette çizim " +
                 "(pahalı), 5-10 m: çoğu güncelleme yalnız konum (ucuz).", DistStepOptions, 1, it => _tags.DistanceStep = DistStepValues[it.Index]);

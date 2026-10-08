@@ -28,9 +28,37 @@ namespace StreamEmber.Overlay
         Ready = 2,
     }
 
+    /// <summary>Atlas layout in device pixels (see se_overlay.h). Rows = 0 means disabled.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AtlasLayout : IEquatable<AtlasLayout>
+    {
+        public int SlotWidth;
+        public int SlotHeight;
+        public int Columns;
+        public int Rows;
+
+        public int SlotCount => Columns * Rows;
+        public bool IsEnabled => Rows > 0 && Columns > 0;
+        public bool Equals(AtlasLayout o) => SlotWidth == o.SlotWidth && SlotHeight == o.SlotHeight && Columns == o.Columns && Rows == o.Rows;
+        public override bool Equals(object obj) => obj is AtlasLayout o && Equals(o);
+        public override int GetHashCode() => ((SlotWidth * 31 + SlotHeight) * 31 + Columns) * 31 + Rows;
+    }
+
+    /// <summary>One atlas slot drawn by the game backend this frame. X/Y = bottom-center anchor, 0..1 of the screen.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct OverlaySprite
+    {
+        public int Slot;
+        public float X;
+        public float Y;
+        public float Scale;
+        public float Alpha;
+    }
+
     public static class OverlayBridge
     {
-        public const int ApiVersion = 1;
+        public const int ApiVersion = 2;
+        public const int MaxSprites = 512;
         private const string CoreDll = "StreamEmber.Overlay.dll";
 
         private static readonly object Gate = new object();
@@ -107,6 +135,41 @@ namespace StreamEmber.Overlay
             }
         }
 
+        /// <summary>Requests an atlas below the screen (device pixels). The effective layout may have fewer columns
+        /// or rows; read it back with <see cref="GetAtlasLayout"/> and lay the page out with that.</summary>
+        public static void SetAtlasLayout(AtlasLayout layout)
+        {
+            if (EnsureLoaded()) SEO_SetAtlasLayout(ref layout);
+        }
+
+        public static void DisableAtlas()
+        {
+            if (EnsureLoaded()) SEO_SetAtlasLayout(IntPtr.Zero);
+        }
+
+        public static AtlasLayout GetAtlasLayout()
+        {
+            var layout = new AtlasLayout();
+            if (EnsureLoaded()) SEO_GetAtlasLayout(out layout);
+            return layout;
+        }
+
+        /// <summary>Call once per game frame (script tick), even with count 0 (hides all sprites).</summary>
+        public static void SubmitSprites(OverlaySprite[] sprites, int count)
+        {
+            if (!EnsureLoaded()) return;
+            if (sprites == null) count = 0;
+            else count = Math.Max(0, Math.Min(Math.Min(count, sprites.Length), MaxSprites));
+            SEO_SubmitSprites(sprites, count);
+        }
+
+        /// <summary>0..3 frames: which submission the backend draws (newest minus delay).</summary>
+        public static int SpriteDelay
+        {
+            get { return EnsureLoaded() ? SEO_GetSpriteDelay() : 0; }
+            set { if (EnsureLoaded()) SEO_SetSpriteDelay(value); }
+        }
+
         /// <summary>Writes a line to StreamEmber\Overlay\logs\overlay.log</summary>
         public static void Log(string message)
         {
@@ -176,5 +239,23 @@ namespace StreamEmber.Overlay
 
         [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
         private static extern void SEO_Log(byte[] utf8Message);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SEO_SetAtlasLayout(ref AtlasLayout layout);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SEO_SetAtlasLayout(IntPtr layout);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int SEO_GetAtlasLayout(out AtlasLayout layout);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SEO_SubmitSprites([In] OverlaySprite[] sprites, int count);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SEO_SetSpriteDelay(int frames);
+
+        [DllImport(CoreDll, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int SEO_GetSpriteDelay();
     }
 }

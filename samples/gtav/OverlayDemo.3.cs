@@ -24,7 +24,7 @@ public class StreamEmberOverlayDemo : Script
     {
         string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
         string core = Path.Combine(Path.Combine(Path.Combine(exeDir, "StreamEmber"), "Overlay"), CoreDll);
-        _available = File.Exists(core) && LoadLibraryW(core) != IntPtr.Zero && SEO_GetApiVersion() == 1;
+        _available = File.Exists(core) && LoadLibraryW(core) != IntPtr.Zero && SEO_GetApiVersion() == 2;
         Interval = 0;
         Tick += OnTick;
     }

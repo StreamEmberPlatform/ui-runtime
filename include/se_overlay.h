@@ -22,7 +22,7 @@ extern "C" {
 #endif
 #define SEO_CALL __cdecl
 
-#define SEO_API_VERSION 1
+#define SEO_API_VERSION 2
 
 // SEO_GetState()
 #define SEO_STATE_FAILED   (-1)
@@ -69,11 +69,39 @@ typedef struct SEO_InitParams {
 
 typedef struct SEO_Frame {
   const uint8_t* pixels;    // BGRA premultiplied, valid until SEO_ReleaseFrame()
-  int32_t width;
+  int32_t width;            // view size = screen + atlas area below it (see SEO_SetAtlasLayout)
   int32_t height;
   int32_t stride;           // bytes per row
   uint64_t serial;          // increases with every painted frame
+  // Union of the areas painted since the previous successful SEO_AcquireFrame (upload only this part).
+  // A consumer that (re)creates its texture must upload the whole frame instead.
+  int32_t dirtyX;
+  int32_t dirtyY;
+  int32_t dirtyWidth;
+  int32_t dirtyHeight;
 } SEO_Frame;
+
+// Sprite atlas: world-anchored UI (name tags, markers) that must stay glued to the game image.
+// The page renders each element into a fixed slot of an atlas area that lies BELOW the visible screen
+// (the browser view is extended by rows * slotHeight pixels). The game submits, every frame, which slot goes
+// where on screen; the backend draws those slots itself in the same frame. Positions never pass through
+// JavaScript, so they have no browser latency.
+typedef struct SEO_AtlasLayout {
+  int32_t slotWidth;        // device pixels
+  int32_t slotHeight;
+  int32_t columns;          // clamped so that columns * slotWidth <= screen width
+  int32_t rows;             // 0 = atlas disabled
+} SEO_AtlasLayout;
+
+typedef struct SEO_Sprite {
+  int32_t slot;             // 0 .. columns * rows - 1 (row-major)
+  float x;                  // anchor = bottom-center of the slot, normalized screen coordinates (0..1)
+  float y;
+  float scale;              // 1 = slot pixels map 1:1 to screen pixels
+  float alpha;              // 0..1
+} SEO_Sprite;
+
+#define SEO_MAX_SPRITES 512
 
 SEO_API int32_t SEO_CALL SEO_GetApiVersion(void);
 
@@ -114,6 +142,19 @@ SEO_API int32_t SEO_CALL SEO_PollFromUi(char* buffer, int32_t bufferSize);
 // Writes a line to <baseDir>/logs/overlay.log
 SEO_API void SEO_CALL SEO_Log(const char* utf8Message);
 
+// Atlas (API 2). layout == NULL or rows <= 0 disables it. Resizes the browser view.
+SEO_API void SEO_CALL SEO_SetAtlasLayout(const SEO_AtlasLayout* layout);
+// Returns 1 and fills *out when the atlas is enabled (columns already clamped), 0 otherwise.
+SEO_API int32_t SEO_CALL SEO_GetAtlasLayout(SEO_AtlasLayout* out);
+// Game side, once per game frame (script tick). Draw order = array order. count is capped at SEO_MAX_SPRITES.
+SEO_API void SEO_CALL SEO_SubmitSprites(const SEO_Sprite* sprites, int32_t count);
+// Backend side, once per Present: copies the submission `delay` submissions before the newest (see
+// SEO_SetSpriteDelay) into out and returns its count.
+SEO_API int32_t SEO_CALL SEO_GetSprites(SEO_Sprite* out, int32_t maxCount);
+// 0..3 game frames; used to line sprites up with the frame being presented (calibrate against native drawing).
+SEO_API void SEO_CALL SEO_SetSpriteDelay(int32_t frames);
+SEO_API int32_t SEO_CALL SEO_GetSpriteDelay(void);
+
 // Function pointer types for backends that load the core with LoadLibrary
 typedef int32_t(SEO_CALL* SEO_GetApiVersion_t)(void);
 typedef int32_t(SEO_CALL* SEO_Initialize_t)(const SEO_InitParams*);
@@ -134,6 +175,12 @@ typedef void(SEO_CALL* SEO_SetFocus_t)(int32_t);
 typedef void(SEO_CALL* SEO_PostToUi_t)(const char*);
 typedef int32_t(SEO_CALL* SEO_PollFromUi_t)(char*, int32_t);
 typedef void(SEO_CALL* SEO_Log_t)(const char*);
+typedef void(SEO_CALL* SEO_SetAtlasLayout_t)(const SEO_AtlasLayout*);
+typedef int32_t(SEO_CALL* SEO_GetAtlasLayout_t)(SEO_AtlasLayout*);
+typedef void(SEO_CALL* SEO_SubmitSprites_t)(const SEO_Sprite*, int32_t);
+typedef int32_t(SEO_CALL* SEO_GetSprites_t)(SEO_Sprite*, int32_t);
+typedef void(SEO_CALL* SEO_SetSpriteDelay_t)(int32_t);
+typedef int32_t(SEO_CALL* SEO_GetSpriteDelay_t)(void);
 
 #ifdef __cplusplus
 }  // extern "C"
