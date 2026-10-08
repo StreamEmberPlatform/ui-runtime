@@ -310,13 +310,13 @@ function Resolve-GamePath {
 function Install-ToGame {
     Write-Title "Kurulum ($Game)"
     $info = $Games[$Game]
-    $game = Resolve-GamePath
-    if (-not (Test-Path (Join-Path $game $info.Exe))) { throw "$($info.Exe) bulunamadı: $game" }
+    $gameDir = Resolve-GamePath  # not $game: PowerShell names are case-insensitive ($Game = parameter)
+    if (-not (Test-Path (Join-Path $gameDir $info.Exe))) { throw "$($info.Exe) bulunamadı: $gameDir" }
     if (Get-Process -Name $info.Process -ErrorAction SilentlyContinue) { throw "$Game açık; dosyalar kilitli. Oyunu kapatın." }
     $dist = Join-Path $DistDir $Game
 
-    Copy-Item (Join-Path $dist $info.Asi) $game -Force
-    $target = Join-Path $game 'StreamEmber\Overlay'
+    Copy-Item (Join-Path $dist $info.Asi) $gameDir -Force
+    $target = Join-Path $gameDir 'StreamEmber\Overlay'
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $source = Join-Path $dist 'StreamEmber\Overlay'
     Get-ChildItem $source | ForEach-Object {
@@ -326,7 +326,7 @@ function Install-ToGame {
             Copy-Item $_.FullName $target -Recurse -Force
         }
     }
-    $scripts = Join-Path $game 'scripts'
+    $scripts = Join-Path $gameDir 'scripts'
     New-Item -ItemType Directory -Force -Path $scripts | Out-Null
     $oldDemo = Join-Path $scripts 'OverlayDemo.3.cs'
     if (Test-Path $oldDemo) {
@@ -336,10 +336,10 @@ function Install-ToGame {
     if (Test-Path (Join-Path $dist 'scripts\*')) { Copy-Item (Join-Path $dist 'scripts\*') $scripts -Force }
     if ($Game -eq 'RDR2') {
         foreach ($need in 'ScriptHookRDR2.dll', 'dinput8.dll', 'ScriptHookRDRDotNet.asi') {
-            if (-not (Test-Path (Join-Path $game $need))) { Write-Warn "$need oyun klasöründe yok (ScriptHookRDR2 / RDR2ScriptHookRuntime kurulu mu?)." }
+            if (-not (Test-Path (Join-Path $gameDir $need))) { Write-Warn "$need oyun klasöründe yok (ScriptHookRDR2 / RDR2ScriptHookRuntime kurulu mu?)." }
         }
     }
-    Write-Ok "Kuruldu: $game"
+    Write-Ok "Kuruldu: $gameDir"
     Write-Host "  Loglar: StreamEmber\Overlay\logs\ ($($info.Log), overlay.log, cef.log)"
 }
 
