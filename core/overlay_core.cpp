@@ -888,6 +888,12 @@ SEO_API int32_t SEO_CALL SEO_LoadUrl(const char* utf8Url, int32_t reloadIfSame) 
       S().browserUrl.clear();  // forces NavigateIfChanged to load it again
     }
   }
+  {
+    // Messages sent from now on belong to the new page: hold them until it has loaded (OnLoadStart of an https page
+    // fires only when the response arrives, so the old page would otherwise receive and lose them)
+    std::lock_guard<std::mutex> lock(S().outboxMutex);
+    S().pageReady = false;
+  }
   // Not running yet: the browser is created with S().url (or navigates right after creation)
   PostUi([]() {
     if (CefRefPtr<CefBrowser> browser = GetBrowser()) {
