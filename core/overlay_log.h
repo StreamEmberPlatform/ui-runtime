@@ -5,7 +5,7 @@
 
 namespace seo {
 
-// Opens <logDir>/overlay.log (appends). Safe to call more than once; the last call wins.
+// Opens <logDir>/Overlay.log (appends). Safe to call more than once; the last call wins.
 void LogOpen(const std::wstring& logDir);
 void Log(const char* level, const std::string& message);
 

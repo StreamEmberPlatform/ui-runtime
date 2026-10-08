@@ -13,5 +13,6 @@ set_target_properties(${TARGET} PROPERTIES
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 target_compile_options(${TARGET} PRIVATE /W4 /utf-8 /wd4100)
+se_add_version_resource(${TARGET} "StreamEmber Overlay for GTA V (Direct3D 11)")
 target_include_directories(${TARGET} PRIVATE "${SHV_SDK_DIR}/inc")
 target_link_libraries(${TARGET} PRIVATE StreamEmber.Overlay.BackendCommon "${SHV_SDK_DIR}/lib/ScriptHookV.lib")

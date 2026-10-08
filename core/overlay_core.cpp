@@ -34,6 +34,12 @@
 namespace seo {
 namespace {
 
+// <game>\StreamEmber\Overlay -> <game>\StreamEmber (shared Logs, Cache and Config folders)
+std::wstring StreamEmberRoot(const std::wstring& base) {
+  const size_t slash = base.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? base : base.substr(0, slash);
+}
+
 constexpr size_t kMaxInboxMessages = 1024;
 constexpr size_t kMaxMessageBytes = 1 << 20;  // 1 MiB per message
 constexpr size_t kMaxPendingToUi = 256;      // game -> UI messages kept while the page is loading
@@ -465,17 +471,19 @@ void CefThreadMain() {
   settings.windowless_rendering_enabled = true;
   settings.background_color = CefColorSetARGB(0, 0, 0, 0);
   settings.log_severity = LOGSEVERITY_WARNING;
+  // <game>\StreamEmber\Overlay (program files) — logs and cache live beside it under <game>\StreamEmber
   const std::wstring& base = S().baseDir;
+  const std::wstring root = StreamEmberRoot(base);
   CefString(&settings.browser_subprocess_path) = base + L"\\StreamEmber.Overlay.Host.exe";
   CefString(&settings.resources_dir_path) = base;
   CefString(&settings.locales_dir_path) = base + L"\\locales";
-  CefString(&settings.root_cache_path) = base + L"\\cache";
-  CefString(&settings.cache_path) = base + L"\\cache\\default";
-  CefString(&settings.log_file) = base + L"\\logs\\cef.log";
+  CefString(&settings.root_cache_path) = root + L"\\Cache\\Overlay";
+  CefString(&settings.cache_path) = root + L"\\Cache\\Overlay\\default";
+  CefString(&settings.log_file) = root + L"\\Logs\\Overlay.Cef.log";
 
   LogInfo("CefInitialize...");
   if (!CefInitialize(mainArgs, settings, new BrowserApp(), nullptr)) {
-    LogError("CefInitialize failed (exit code " + std::to_string(CefGetExitCode()) + "). See logs\\cef.log.");
+    LogError("CefInitialize failed (exit code " + std::to_string(CefGetExitCode()) + "). See StreamEmber\\Logs\\Overlay.Cef.log.");
     S().state.store(SEO_STATE_FAILED);
     return;
   }
@@ -544,7 +552,7 @@ SEO_API int32_t SEO_CALL SEO_Initialize(const SEO_InitParams* params) {
     S().viewHeight.store(params->height);
   }
 
-  LogOpen(S().baseDir + L"\\logs");
+  LogOpen(StreamEmberRoot(S().baseDir) + L"\\Logs");
   LogInfo("StreamEmber Overlay core starting (API " + std::to_string(SEO_API_VERSION) + ", view " +
           std::to_string(S().viewWidth.load()) + "x" + std::to_string(S().viewHeight.load()) + ").");
 

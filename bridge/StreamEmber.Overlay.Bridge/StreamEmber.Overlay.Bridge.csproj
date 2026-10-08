@@ -1,15 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Game independent C# bridge to StreamEmber.Overlay.dll (GTA V via SHVDN, later RDR2). -->
+  <!-- Game independent C# bridge to StreamEmber.Overlay.dll, used by the StreamEmber Runtime scripts of every game.
+       Installed into <game>\StreamEmber\Scripts. -->
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
-    <LangVersion>latest</LangVersion>
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>StreamEmber.Overlay.Bridge</AssemblyName>
     <RootNamespace>StreamEmber.Overlay</RootNamespace>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <Version>0.1.0</Version>
+    <Product>StreamEmber Overlay Bridge</Product>
   </PropertyGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-# Game-independent part of the backends: overlay.ini, core loading, window input hook, D3D11 renderer.
+# Game-independent part of the backends: Overlay.ini, core loading, window input hook, D3D11 renderer.
 add_library(StreamEmber.Overlay.BackendCommon STATIC
   backend_base.cpp
   backend_common.h

@@ -7,6 +7,7 @@ add_library(${TARGET} SHARED
   ${SEO_INCLUDE_DIR}/se_overlay.h
 )
 SET_LIBRARY_TARGET_PROPERTIES(${TARGET})
+se_add_version_resource(${TARGET} "StreamEmber Overlay core (CEF browser)")
 # CEF's flags include /WX; keep warnings visible but not fatal for our own code.
 target_compile_options(${TARGET} PRIVATE /WX-)
 target_compile_definitions(${TARGET} PRIVATE SE_OVERLAY_CORE_BUILD)

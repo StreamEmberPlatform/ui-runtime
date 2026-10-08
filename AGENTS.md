@@ -1,8 +1,8 @@
-# OverlayRuntime — ajan notları
+# ui-runtime (StreamEmber Overlay) — ajan notları
 
 Önce `README.md` okunur. Bu proje oyundan bağımsız bir çekirdek + oyuna özel backend'lerdir; GTA V'ye özgü kod
-yalnız `backends/gtav-*` ve `samples/gtav`, RDR2'ye özgü kod yalnız `backends/rdr2-*` ve `samples/rdr2` içine girer.
-İki oyunda ortak olan backend kodu `backends/common`, trainer kodu `samples/common` içindedir (WorldTags → ITagWorld).
+yalnız `backends/gtav-*` ve `trainers/gtav`, RDR2'ye özgü kod yalnız `backends/rdr2-*` ve `trainers/rdr2` içine girer.
+İki oyunda ortak olan backend kodu `backends/common`, trainer kodu `trainers/common` içindedir (WorldTags → ITagWorld).
 
 - C ABI (`include/se_overlay.h`) değişirse `SEO_API_VERSION` artırılır; backend'ler ve `bridge/OverlayBridge.cs`
   (`ApiVersion`) birlikte güncellenir.
@@ -21,4 +21,17 @@ yalnız `backends/gtav-*` ve `samples/gtav`, RDR2'ye özgü kod yalnız `backend
   `build.ps1` içindeki `$CefMajorMin/Max` ve imzalar gözden geçirilir. Sürümler arasında imzası değişen
   callback'ler (ör. `OnBeforePopup`) override edilmez.
 - Kullanıcıya görünen metinler Türkçe; sınıf/değişken adları ve kod yorumları İngilizce.
-- SHVDN ham scriptleri (`*.3.cs`) C# 5 ile derlenir: `$""`, `?.`, `nameof`, `out var` kullanılmaz.
+
+## Dağıtım ve adlar
+
+- Çıktı adları `StreamEmber.<Bileşen>[.<OYUN>].<uzantı>` kalıbındadır (OYUN = GTAV | RDR2). Oyun kökünde yalnız
+  `.asi`; diğer her şey `StreamEmber\` altında: `Overlay\`, `Scripts\`, `Config\Overlay.ini`, `Logs\Overlay*.log`,
+  `Cache\Overlay\`, `Manifests\`, `Licenses\`. Yeni bir dosya/yol eklenirse README'deki tablo, `build.ps1` ve CI'daki
+  paket kontrolü birlikte güncellenir.
+- Dağıtıma `.pdb`, `.xml`, `.lib` girmez (CI kontrol eder).
+- Sürüm `VERSION` + git geçmişinden gelir (`tools/StreamEmber.Build.psm1`; üç repoda aynı dosya, birlikte değiştirilir).
+  Elle sürüm numarası yazılmaz; C# için `Directory.Build.props`, C++ için `cmake/StreamEmberVersion.cmake`.
+- Trainer'lar `StreamEmber.Scripting.<OYUN>.dll`'e (runtime repoları) karşı derlenir; upstream SHVDN/RDR2DN
+  DLL'lerine başvuru eklenmez.
+- MHud `mhud.lock` ile, CEF `cef.lock` ile sabittir; ikisi de commit edilir.
+- Kullanıcı ayar dosyası (`Overlay.ini`) kurulumda korunur; şablonda yeni anahtar eklenirse kodda varsayılanı olmalı.

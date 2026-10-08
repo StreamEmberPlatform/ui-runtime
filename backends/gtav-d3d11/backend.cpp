@@ -2,7 +2,7 @@
 //
 // Loaded by ScriptHookV's ASI loader from the game folder. It
 //   1. registers ScriptHookV's IDXGISwapChain::Present callback (must happen in DllMain),
-//   2. on the first Present: reads StreamEmber\Overlay\overlay.ini, hooks the game window, and (unless
+//   2. on the first Present: reads StreamEmber\Config\Overlay.ini, hooks the game window, and (unless
 //      TestPattern=1) loads StreamEmber\Overlay\StreamEmber.Overlay.dll on a worker thread and starts CEF,
 //   3. every Present: uploads the newest CEF frame and draws it over the game with the game's own D3D11 device.
 // Natives can't be called from the Present callback; game data must come from scripts through the bridge.
@@ -32,7 +32,7 @@ std::atomic<bool> g_disabled{false};
 Renderer* g_renderer = nullptr;  // created on the render thread, never destroyed (process exit)
 
 void InitializeOnFirstPresent(IDXGISwapChain* swapChain) {
-  if (!BackendStartup(g_module, L"gtav-backend.log", "GTA V")) {
+  if (!BackendStartup(g_module, L"Overlay.Backend.log", "GTA V")) {
     g_disabled.store(true);
     return;
   }

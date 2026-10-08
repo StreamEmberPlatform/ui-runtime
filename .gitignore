@@ -4,8 +4,12 @@
 # Build outputs
 /build/
 /dist/
+/artifacts/
 bin/
 obj/
+
+# CI checkouts / downloads
+/_deps/
 
 # IDE
 .vs/

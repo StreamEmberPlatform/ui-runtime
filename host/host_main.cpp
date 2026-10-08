@@ -99,7 +99,7 @@ class HostApp : public CefApp, public CefRenderProcessHandler {
     CefRefPtr<CefV8Value> result;
     CefRefPtr<CefV8Exception> error;
     if (!context->Eval(kBootstrapJs, CefString(), 0, result, error)) {
-      // Shows up in overlay.log through the core's console handler
+      // Shows up in Overlay.log through the core's console handler
       const std::string line = error ? std::to_string(error->GetLineNumber()) : "?";
       frame->ExecuteJavaScript("console.error('streamember bridge bootstrap failed at line " + line + "');",
                                frame->GetURL(), 0);

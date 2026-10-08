@@ -35,4 +35,5 @@ set_target_properties(${TARGET} PROPERTIES
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 target_compile_options(${TARGET} PRIVATE /W4 /utf-8 /wd4100)
+se_add_version_resource(${TARGET} "StreamEmber Overlay for RDR2 (Direct3D 12)")
 target_link_libraries(${TARGET} PRIVATE StreamEmber.Overlay.BackendCommon seo_minhook d3d12 d3d11)

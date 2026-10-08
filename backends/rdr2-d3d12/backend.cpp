@@ -92,7 +92,7 @@ CreateSwapChainForHwndFn g_origCreateSwapChainForHwnd = nullptr;
 
 HMODULE g_module = nullptr;
 
-// --- Diagnostics: logs\rdr2-diag.log ---------------------------------------------------------------------------
+// --- Diagnostics: StreamEmber\Logs\Overlay.Diag.log -----------------------------------------------------------
 // DXGI events (swap chain creation, resizes, failed presents, device removal), a heartbeat, and every serious
 // exception with the module it happened in. Written raw and allocation free, so the vectored exception handler can
 // use it too. Capped, so a stream of first-chance exceptions cannot fill the disk.
@@ -130,13 +130,13 @@ void DiagOpen() {
   wchar_t* slash = wcsrchr(dir, L'\\');
   if (slash == nullptr) return;
   *slash = 0;
-  const wchar_t* parts[] = {L"\\StreamEmber", L"\\Overlay", L"\\logs"};
+  const wchar_t* parts[] = {L"\\StreamEmber", L"\\Logs"};
   for (const wchar_t* part : parts) {
     if (lstrlenW(dir) + lstrlenW(part) + 20 >= MAX_PATH) return;
     lstrcatW(dir, part);
     CreateDirectoryW(dir, nullptr);
   }
-  lstrcatW(dir, L"\\rdr2-diag.log");
+  lstrcatW(dir, L"\\Overlay.Diag.log");
   g_diag = CreateFileW(dir, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 }
 
@@ -416,7 +416,7 @@ void DrawOverlay(IDXGISwapChain3* swapChain, ID3D12Device* device12) {
 
   if (!g_backendStarted) {
     g_backendStarted = true;
-    g_backendDisabled = !BackendStartup(g_module, L"rdr2-backend.log", "RDR2 (D3D12)");
+    g_backendDisabled = !BackendStartup(g_module, L"Overlay.Backend.log", "RDR2 (D3D12)");
     if (g_backendDisabled) {
       return;
     }
@@ -794,10 +794,10 @@ void WriteEarlyLog(const char* message) {
   wchar_t path[MAX_PATH] = {};
   GetModuleFileNameW(g_module, path, MAX_PATH);
   std::wstring dir(path);
-  dir = dir.substr(0, dir.find_last_of(L"\\/")) + L"\\StreamEmber\\Overlay\\logs";
+  dir = dir.substr(0, dir.find_last_of(L"\\/")) + L"\\StreamEmber\\Logs";
   CreateDirectoryW((dir.substr(0, dir.find_last_of(L"\\/"))).c_str(), nullptr);
   CreateDirectoryW(dir.c_str(), nullptr);
-  HANDLE f = CreateFileW((dir + L"\\rdr2-backend.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+  HANDLE f = CreateFileW((dir + L"\\Overlay.Backend.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                          CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f != INVALID_HANDLE_VALUE) {
     DWORD written = 0;

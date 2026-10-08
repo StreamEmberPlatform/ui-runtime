@@ -4,6 +4,7 @@ SET_CEF_TARGET_OUT_DIR()
 
 add_executable(${TARGET} WIN32 host_main.cpp)
 SET_EXECUTABLE_TARGET_PROPERTIES(${TARGET})
+se_add_version_resource(${TARGET} "StreamEmber Overlay CEF sub-process")
 target_compile_options(${TARGET} PRIVATE /WX-)
 target_include_directories(${TARGET} PRIVATE ${CEF_ROOT})
 add_dependencies(${TARGET} libcef_dll_wrapper)

@@ -46,7 +46,7 @@ struct CoreApi {
 };
 
 // --- Startup (backend_base.cpp) -------------------------------------------------------------------------------
-// Reads <game folder>\StreamEmber\Overlay\overlay.ini and opens logs\<logName>. Call once, from the render thread
+// Reads <game folder>\StreamEmber\Config\Overlay.ini and opens StreamEmber\Logs\<logName>. Call once, from the render thread
 // on the first presented frame (not from DllMain). Returns false when the overlay is disabled (Enabled=0).
 bool BackendStartup(HMODULE module, const wchar_t* logName, const char* displayName);
 // Hooks the game window and (unless TestPattern=1) loads the core on a worker thread. Call once after

@@ -1,0 +1,34 @@
+<Project>
+  <!--
+    Shared settings of the C# projects (bridge, trainers). The C++ targets get the same version from CMake
+    (-DSE_VERSION, cmake/StreamEmberVersion.cmake).
+    SE_VERSION is SemVer (1.2.3 or 1.2.3-ci.4). build.ps1 / CI pass it (-p:SE_VERSION=...), computed from the VERSION
+    file and git history (tools/StreamEmber.Build.psm1); IDE builds get 0.0.0-dev.
+  -->
+  <PropertyGroup>
+    <SE_VERSION Condition="'$(SE_VERSION)' == ''">0.0.0-dev</SE_VERSION>
+    <SE_VERSION_CORE>$([System.Text.RegularExpressions.Regex]::Match('$(SE_VERSION)', '^\d+\.\d+\.\d+').Value)</SE_VERSION_CORE>
+    <SE_VERSION_CORE Condition="'$(SE_VERSION_CORE)' == ''">0.0.0</SE_VERSION_CORE>
+
+    <Company>StreamEmber</Company>
+    <Copyright>Copyright © StreamEmber</Copyright>
+    <Version>$(SE_VERSION)</Version>
+    <!-- Stable assembly identity: scripts bind to the bridge by name + major version only -->
+    <AssemblyVersion>$([System.Version]::Parse('$(SE_VERSION_CORE)').Major).0.0.0</AssemblyVersion>
+    <FileVersion>$(SE_VERSION_CORE).0</FileVersion>
+    <InformationalVersion>$(SE_VERSION)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <!-- Shipped files only: no .pdb, no .xml -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+</Project>

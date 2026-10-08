@@ -170,7 +170,7 @@ namespace StreamEmber.Overlay
             set { if (EnsureLoaded()) SEO_SetSpriteDelay(value); }
         }
 
-        /// <summary>Writes a line to StreamEmber\Overlay\logs\overlay.log</summary>
+        /// <summary>Writes a line to StreamEmber\Logs\Overlay.log</summary>
         public static void Log(string message)
         {
             if (message != null && EnsureLoaded())

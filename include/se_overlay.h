@@ -139,7 +139,7 @@ SEO_API void SEO_CALL SEO_PostToUi(const char* utf8Json);
 // Returns 0 if the queue is empty, or -(required buffer size) if buffer is too small (message stays queued).
 SEO_API int32_t SEO_CALL SEO_PollFromUi(char* buffer, int32_t bufferSize);
 
-// Writes a line to <baseDir>/logs/overlay.log
+// Writes a line to <game>/StreamEmber/Logs/Overlay.log
 SEO_API void SEO_CALL SEO_Log(const char* utf8Message);
 
 // Atlas (API 2). layout == NULL or rows <= 0 disables it. Resizes the browser view.

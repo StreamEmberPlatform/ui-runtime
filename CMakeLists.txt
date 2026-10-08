@@ -1,4 +1,4 @@
-# StreamEmber OverlayRuntime — CEF based HTML overlay for single-player game mods.
+# StreamEmber Overlay (ui-runtime) — CEF based HTML overlay for single-player game mods.
 #
 # Targets:
 #   StreamEmber.Overlay        core DLL (CEF browser process side, C ABI in include/se_overlay.h)
@@ -6,7 +6,7 @@
 #   StreamEmber.Overlay.GTAV   GTA V backend (.asi, D3D11, ScriptHookV present callback)
 #   StreamEmber.Overlay.RDR2   RDR2 backend (.asi, D3D12 via D3D11On12, own DXGI hooks with MinHook)
 #
-# Normally driven by build.ps1, which downloads CEF into third_party/cef first.
+# Normally driven by build.ps1, which downloads CEF into third_party/cef first and passes -DSE_VERSION.
 cmake_minimum_required(VERSION 3.21)
 project(StreamEmberOverlay LANGUAGES C CXX)
 
@@ -18,8 +18,11 @@ set(CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cef" CACHE PATH "CEF binar
 if(NOT EXISTS "${CEF_ROOT}/cmake/FindCEF.cmake")
   message(FATAL_ERROR "CEF not found in ${CEF_ROOT}. Run build.ps1 (it downloads CEF) or set -DCEF_ROOT=...")
 endif()
-set(SHV_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../GTAVScriptHookRuntime/source/core/sdk" CACHE PATH
+set(SHV_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ScriptHookV_SDK" CACHE PATH
     "ScriptHookV SDK folder containing inc/main.h and lib/ScriptHookV.lib")
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(StreamEmberVersion)
 
 # Static CRT everywhere (CEF's wrapper is built with /MT); avoids mixing /MD and /MT.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

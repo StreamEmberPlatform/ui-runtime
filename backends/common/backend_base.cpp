@@ -1,4 +1,4 @@
-// StreamEmber Overlay — game backends: startup, overlay.ini, core (StreamEmber.Overlay.dll) loading, overlay
+// StreamEmber Overlay — game backends: startup, Overlay.ini, core (StreamEmber.Overlay.dll) loading, overlay
 // state and logging. Shared by every backend; the game-specific part (how frames are presented) lives in
 // backends/<game>-*/backend.cpp.
 #include <windows.h>
@@ -23,7 +23,8 @@ namespace {
 
 HMODULE g_module = nullptr;
 Config g_config;
-std::wstring g_baseDir;
+std::wstring g_baseDir;  // <game>\StreamEmber\Overlay (program files)
+std::wstring g_rootDir;  // <game>\StreamEmber (Config, Logs)
 CoreApi g_coreApi;
 std::atomic<const CoreApi*> g_core{nullptr};
 std::atomic<bool> g_localVisible{true};
@@ -50,8 +51,8 @@ std::string Narrow(const std::wstring& text) {
 }
 
 void OpenLog(const wchar_t* logName) {
-  const std::wstring dir = g_baseDir + L"\\logs";
-  CreateDirectoryW(g_baseDir.c_str(), nullptr);
+  const std::wstring dir = g_rootDir + L"\\Logs";
+  CreateDirectoryW(g_rootDir.c_str(), nullptr);
   CreateDirectoryW(dir.c_str(), nullptr);
   // Truncated on every game start
   g_logFile = CreateFileW((dir + L"\\" + logName).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
@@ -59,7 +60,7 @@ void OpenLog(const wchar_t* logName) {
 }
 
 void ReadConfig() {
-  const std::wstring ini = g_baseDir + L"\\overlay.ini";
+  const std::wstring ini = g_rootDir + L"\\Config\\Overlay.ini";
   auto readInt = [&](const wchar_t* section, const wchar_t* key, int def) {
     return static_cast<int>(GetPrivateProfileIntW(section, key, def, ini.c_str()));
   };
@@ -135,20 +136,21 @@ void LoadCore(int width, int height) {
     return;
   }
   g_core.store(&api);
-  BLogInfo("Core loaded; CEF is starting (see logs\\overlay.log).");
+  BLogInfo("Core loaded; CEF is starting (see StreamEmber\\Logs\\Overlay.log).");
 }
 
 }  // namespace
 
 bool BackendStartup(HMODULE module, const wchar_t* logName, const char* displayName) {
   g_module = module;
-  g_baseDir = ModuleDirectory(g_module) + L"\\StreamEmber\\Overlay";
+  g_rootDir = ModuleDirectory(g_module) + L"\\StreamEmber";
+  g_baseDir = g_rootDir + L"\\Overlay";
   OpenLog(logName);
   ReadConfig();
   BLogInfo(std::string("StreamEmber Overlay ") + displayName + " backend. Base: " + Narrow(g_baseDir) +
            (g_config.testPattern ? " (TestPattern=1)" : ""));
   if (!g_config.enabled) {
-    BLogInfo("Disabled in overlay.ini (Enabled=0).");
+    BLogInfo("Disabled in StreamEmber\\Config\\Overlay.ini (Enabled=0).");
     return false;
   }
   return true;

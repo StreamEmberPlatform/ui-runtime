@@ -20,7 +20,7 @@ HANDLE g_logFile = INVALID_HANDLE_VALUE;
 void LogOpen(const std::wstring& logDir) {
   std::lock_guard<std::mutex> lock(LogMutex());
   CreateDirectoryW(logDir.c_str(), nullptr);
-  const std::wstring path = logDir + L"\\overlay.log";
+  const std::wstring path = logDir + L"\\Overlay.log";
   HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                             FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
