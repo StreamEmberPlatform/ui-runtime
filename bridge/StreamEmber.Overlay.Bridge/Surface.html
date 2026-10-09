@@ -1,0 +1,64 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:transparent;overflow:hidden}iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none}</style>
+<script>
+// Engine-owned composition surface. Product UI remains in each mod's page.
+(function () {
+  'use strict';
+  const layers = new Map();
+  let epoch = '', focused = '', atlasHeight = 0;
+  function geometry(layer) {
+    const h = Math.max(1, innerHeight - atlasHeight), y = h + layer.offset;
+    layer.frame.style.clipPath = 'polygon(0 0,100% 0,100% '+h+'px,0 '+h+'px,0 '+y+'px,100% '+y+'px,100% '+(y+layer.height)+'px,0 '+(y+layer.height)+'px)';
+    layer.frame.style.zIndex = layer.id === focused ? '100' : '1';
+    layer.frame.style.pointerEvents = layer.id === focused ? 'auto' : 'none';
+    layer.frame.contentWindow.postMessage({ seLayout: true, screenHeight: h, atlasOffset: layer.offset, atlasHeight: atlasHeight }, '*');
+  }
+  function send(layer, value) { layer.frame.contentWindow.postMessage({ seDispatch: value }, '*'); }
+  function focus() {
+    layers.forEach(geometry);
+    const layer = layers.get(focused);
+    if (layer) { layer.frame.focus(); layer.frame.contentWindow.postMessage({ seFocus: true }, '*'); }
+  }
+  window.addEventListener('resize', () => layers.forEach(geometry));
+  window.addEventListener('message', function (event) {
+    const layer = Array.from(layers.values()).find(l => l.frame.contentWindow === event.source);
+    if (!layer) return;
+    const d = event.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.seReady) {
+      layer.ready = true; geometry(layer);
+      layer.pending.splice(0).forEach(v => send(layer, v));
+      if (focused === layer.id) focus();
+    }
+    if (typeof d.sePost === 'string') window.streamember.post({ surface: 'message', epoch: epoch, id: layer.id, json: d.sePost });
+  });
+  window.streamember.on(function (d) {
+    if (!d || d.surface !== 'command') return;
+    if (d.op === 'reset') { layers.forEach(l => l.frame.remove()); layers.clear(); epoch = d.epoch; return; }
+    if (d.epoch !== epoch) return;
+    if (d.op === 'register') {
+      let layer = layers.get(d.id);
+      if (layer && layer.url === d.url && !d.reload) return;
+      if (layer) layer.frame.remove();
+      const frame = document.createElement('iframe');
+      frame.name = 'streamember-layer-' + d.id;
+      layer = { id: d.id, url: d.url, frame: frame, offset: d.offset || 0, height: d.height || 0, ready: false, pending: [] };
+      layers.set(d.id, layer); frame.src = d.url; document.body.appendChild(frame); geometry(layer);
+    } else if (d.op === 'remove') {
+      const layer = layers.get(d.id); if (layer) layer.frame.remove(); layers.delete(d.id);
+    } else if (d.op === 'focus') { focused = d.id || ''; focus();
+    } else if (d.op === 'layout') {
+      atlasHeight = d.height || 0;
+      (d.layers || []).forEach(v => { const l = layers.get(v.id); if (l) { l.offset = v.offset; l.height = v.height; } });
+      layers.forEach(geometry);
+    } else if (d.op === 'visible') {
+      const l = layers.get(d.id); if (l) l.frame.style.visibility = d.visible ? 'visible' : 'hidden';
+    } else if (d.op === 'send') {
+      const l = layers.get(d.id); if (!l) return;
+      if (l.ready) send(l, d.json);
+      else { if (l.pending.length >= 256) l.pending.shift(); l.pending.push(d.json); }
+    }
+  });
+  window.streamember.post({ surface: 'ready' });
+})();
+</script>

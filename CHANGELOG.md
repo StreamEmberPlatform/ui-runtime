@@ -3,6 +3,9 @@
 Sürümler `VERSION` (major.minor) + commit sayısı (patch) ile otomatik verilir; her `main` push'u bir sürümdür.
 Burada yalnız kayda değer değişiklikler tutulur.
 
+## Yayımlanmamış — 2026-10-09
+- API 4: mod başına OverlayChannel; ayrı sayfa/mesaj kuyruğu, ortak atlas kotası ve tek menü odağı. Aborted ile kanal temizliği. Kanal yalıtımı için yerel testler.
+
 ## 1.0
 - Sol üstte küçük "StreamEmber" çalışıyor göstergesi + durum noktası (sarı/yeşil/kırmızı); `ShowBadge=0` kapatır.
 - Loglar her açılışta `<ad>.previous.log`'a döndürülür (önceki oturumun logu kaybolmaz).

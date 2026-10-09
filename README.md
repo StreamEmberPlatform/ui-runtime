@@ -4,9 +4,8 @@ Tek oyunculu oyun modları için **HTML/CSS/JS overlay motoru** (FiveM NUI benze
 oyun sürecinde pencere olmadan (offscreen) çalışır; sayfanın görüntüsü her karede oyunun üzerine çizilir; sayfa ile
 oyun scriptleri arasında JSON mesajlaşması vardır.
 
-Overlay **yalnız motordur**: içinde sayfa, trainer, arayüz kiti ya da varsayılan veri yoktur. Hangi sayfanın
-gösterileceğine scriptler karar verir ve sayfayı genelde CDN'den yükler (`OverlayBridge.LoadUrl`). Hiçbir script sayfa
-yüklemezse overlay boş (şeffaf) kalır.
+Overlay **yalnız motordur**: ürün arayüzleri modların içinde kalır. Modlar `OverlayChannel` ile kendi sayfasını
+açar. Köprü, sayfaları ortak bir CEF yüzeyinde birleştirir; hiçbir mod sayfa yüklemezse yüzey şeffaf kalır.
 
 Tek repo, iki ürün: oyundan bağımsız çekirdek + oyuna özel çizim katmanları (backend), **GTA V (Legacy, D3D11)** ve
 **RDR2 (DirectX 12)**. İkisi aynı çekirdeği ve aynı C# köprüsünü kullanır; her oyun için ayrı paket çıkar.
@@ -66,18 +65,27 @@ Eski düzenden (OverlayRuntime) geçiş: `-Deploy` `StreamEmber\Overlay\overlay.
 taşır; `scripts\` altındaki eski köprü/trainer dosyalarını ve eski `StreamEmber\Overlay\ui\` klasörünü `.disabled` yapar.
 Eski `StreamEmber\Overlay\logs\` ve `cache\` klasörleri elle silinebilir.
 
-## Sayfayı yükleme (API 3)
+## Sayfayı yükleme ve birden fazla mod (API 4)
 
 ```csharp
 using StreamEmber.Overlay;
-// Script başlarken (ör. ilk Tick'te): aynı adres zaten açıksa bir şey yapmaz
-OverlayBridge.LoadUrl("https://streamemberplatform.github.io/gtav-trainer-scripthook/");
+// Mod başına tek kanal; Aborted olayında Dispose çağırın.
+var ui = new OverlayChannel("trainer");
+ui.LoadUrl("https://streamemberplatform.github.io/gtav-trainer-scripthook/");
 ```
 
 - Tam URL (`https://`, `file://`), `""` = boş sayfa, diğer her şey `<oyun>\StreamEmber`'a göre dosya yolu (yerel geliştirme).
 - Sayfa CEF önbelleğinde tutulur; CDN'e her oyunda yeniden gidilmez, değişen dosyalar yeniden indirilir.
 - `Overlay.ini` → `StartUrl` yalnız açılışta gösterilen sayfadır (geliştirme için); bir script `LoadUrl` çağırınca onunki geçer.
-- Aynı anda tek bir script sayfa sahibi olmalı (çekirdekte tek gelen kutusu var: `SEO_PollFromUi`).
+- En fazla 8 kanal aynı anda HUD gösterebilir. Mesajlar kanal kimliği ve oturum kimliği ile ayrılır; her kanalın
+  gelen/giden bekleme kuyruğu 256 mesajla sınırlıdır. Dolu kuyruk en eski mesajı bırakır.
+- `ui.InputMode = Ui` menü odağını alır; önceki sahibine `close` gönderilir. `ui.Focus(false)` oyun tarafından
+  yönlendirilen klavyeli menüler içindir. Kapanan eski mod yeni sahibin odağını bırakamaz.
+- Atlas tek texture içinde bölünür; toplam en fazla 512 sprite ve çekirdeğin texture sınırı geçerlidir.
+  Modlar daima `ui.GetAtlasLayout()` ile etkin kotayı okur. Konumlar oyun karesinde, içerik değişiklikleri JS'de işlenir.
+- Tüm modlar aynı `StreamEmber.Overlay.Bridge.dll` kopyasını kullanmalı. Core, Host, backend ve köprü API 4 olarak
+  birlikte güncellenmeli. Eski `OverlayBridge.LoadUrl` kullanan modlar ortak yüzeyi değiştirebilir; kanala geçirilmelidir.
+- Ortak yüzey kodu köprüde gömülüdür; çalışırken `Cache/Overlay/StreamEmber.Surface.v4.html` olarak üretilir.
 
 ### Çalışıyor göstergesi
 
@@ -95,21 +103,25 @@ if (window.streamember) {
 }
 ```
 
-`window.streamember` yalnız ana çerçevede vardır. Sayfa normal bir tarayıcıda da açılabilir (köprü yoksa test edilebilir
-olmalı). Mesaj başına üst sınır 1 MiB; oyun okumazsa kuyruk 1024 mesajda en eskiyi atar.
+`window.streamember` mod çerçevelerine de enjekte edilir. `screenHeight` gerçek oyun yüksekliğini, `atlasOffset`
+kanalın atlas başlangıcını verir. Sayfa normal tarayıcıda da açılabilmelidir. Ham native mesaj sınırı 1 MiB;
+kanaldan gönderilen JSON sınırı 524288 karakterdir. Ürün sayfaları sadece kendi kanalına mesaj gönderir.
 
 ## C# köprüsü
 
 ```csharp
 using StreamEmber.Overlay;
-OverlayBridge.LoadUrl("https://.../index.html");                 // sayfa (CDN)
-if (OverlayBridge.IsReady) OverlayBridge.Send("{\"type\":\"gift\",\"user\":\"ali\",\"count\":5}");
-while (OverlayBridge.TryReceive(out string json)) { /* UI'dan gelen */ }
-OverlayBridge.InputMode = OverlayInputMode.Ui;   // menü modu; Tick'te oyun kontrollerini de kapatın
+var ui = new OverlayChannel("my-mod"); // alan olarak saklayın; Tick içinde yeniden oluşturmayın
+ui.LoadUrl("https://.../index.html");
+if (ui.IsReady) ui.Send("{\"action\":\"state\",\"data\":{\"count\":5}}");
+while (ui.TryReceive(out string json)) { /* yalnız bu modun mesajları */ }
+ui.InputMode = OverlayInputMode.Ui;   // menü açıkken; Tick'te oyun kontrollerini de kapatın
+// Aborted += (s, e) => ui.Dispose();
 ```
 
-Köprü (`StreamEmber.Overlay.Bridge.dll`) oyundan bağımsızdır, native çağırmaz, hiçbir zaman exception fırlatmaz:
-overlay kurulu değilse ya da API sürümü uymuyorsa her çağrı sessizce bir şey yapmaz. Scriptler ona derleme zamanında
+Köprü (`StreamEmber.Overlay.Bridge.dll`) oyundan bağımsızdır, oyun native'lerini çağırmaz. Ham `OverlayBridge`
+kurulu olmayan/uyumsuz motorda sessizce durur. Kanal kaydı boş, tekrarlanan kimlikte veya kota aşımında hata verir.
+Scriptler ona derleme zamanında
 başvurur (`Private=false`); oyunda `StreamEmber\Scripts\` altındaki kopya kullanılır.
 
 ## Dünyaya bağlı arayüzde kare senkronu: sprite atlası

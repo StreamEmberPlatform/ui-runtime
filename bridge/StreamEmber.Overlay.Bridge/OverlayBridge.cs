@@ -57,7 +57,7 @@ namespace StreamEmber.Overlay
 
     public static class OverlayBridge
     {
-        public const int ApiVersion = 3;
+        public const int ApiVersion = 4;
         public const int MaxSprites = 512;
         private const string CoreDll = "StreamEmber.Overlay.dll";
 

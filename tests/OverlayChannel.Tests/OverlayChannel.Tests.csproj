@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><LangVersion>latest</LangVersion><PlatformTarget>x64</PlatformTarget></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Compile Include="../../bridge/StreamEmber.Overlay.Bridge/OverlayChannel.cs" Link="OverlayChannel.cs" />
+    <EmbeddedResource Include="../../bridge/StreamEmber.Overlay.Bridge/Surface.html" LogicalName="StreamEmber.Surface.html" />
+  </ItemGroup>
+</Project>

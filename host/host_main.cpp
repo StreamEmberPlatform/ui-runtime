@@ -20,9 +20,13 @@ constexpr size_t kMaxMessageBytes = 1 << 20;
 // Defines the public API on top of the native __seNativePost function.
 const char kBootstrapJs[] = R"JS(
 (function () {
-  var nativePost = window.__seNativePost;
+  var child = window.parent !== window;
+  var nativePost = child ? function (json) { parent.postMessage({ sePost: json }, '*'); } : window.__seNativePost;
+  var geometry = { screenHeight: innerHeight, atlasOffset: 0 };
   var listeners = [];
   var api = {
+    get screenHeight() { return geometry.screenHeight; },
+    get atlasOffset() { return geometry.atlasOffset; },
     post: function (message) {
       nativePost(typeof message === 'string' ? message : JSON.stringify(message));
     },
@@ -44,6 +48,22 @@ const char kBootstrapJs[] = R"JS(
     }
   };
   Object.defineProperty(window, 'streamember', { value: Object.freeze(api), enumerable: false });
+  if (child) {
+    window.addEventListener('message', function (event) {
+      if (event.source !== parent || !event.data) return;
+      var d = event.data;
+      if (typeof d.seDispatch === 'string') api._dispatch(d.seDispatch);
+      if (d.seFocus) window.focus();
+      if (d.seLayout) {
+        geometry.screenHeight = d.screenHeight; geometry.atlasOffset = d.atlasOffset;
+        window.dispatchEvent(new Event('resize'));
+        // Keep every HUD inside the actual game viewport even though the atlas extends the browser below it.
+        var zoom = parseFloat(document.documentElement.style.zoom) || 1;
+        document.querySelectorAll('.mh-screen').forEach(function (s) { s.style.height = (d.screenHeight / zoom) + 'px'; s.style.bottom = 'auto'; });
+      }
+    });
+    window.addEventListener('DOMContentLoaded', function () { parent.postMessage({ seReady: true }, '*'); });
+  }
 })();
 )JS";
 
@@ -89,11 +109,8 @@ class HostApp : public CefApp, public CefRenderProcessHandler {
   void OnContextCreated(CefRefPtr<CefBrowser> browser,
                         CefRefPtr<CefFrame> frame,
                         CefRefPtr<CefV8Context> context) override {
-    if (!frame->IsMain()) {
-      return;  // iframes do not get the bridge
-    }
     CefRefPtr<CefV8Value> global = context->GetGlobal();
-    global->SetValue("__seNativePost", CefV8Value::CreateFunction("__seNativePost", new PostHandler()),
+    if (frame->IsMain()) global->SetValue("__seNativePost", CefV8Value::CreateFunction("__seNativePost", new PostHandler()),
                      V8_PROPERTY_ATTRIBUTE_DONTENUM);
 
     CefRefPtr<CefV8Value> result;

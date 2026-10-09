@@ -22,7 +22,7 @@ extern "C" {
 #endif
 #define SEO_CALL __cdecl
 
-#define SEO_API_VERSION 3
+#define SEO_API_VERSION 4
 
 // SEO_GetState()
 #define SEO_STATE_FAILED   (-1)

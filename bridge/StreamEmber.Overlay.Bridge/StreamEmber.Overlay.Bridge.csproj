@@ -10,4 +10,8 @@
     <Product>StreamEmber Overlay Bridge</Product>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <EmbeddedResource Include="Surface.html" LogicalName="StreamEmber.Surface.html" />
+  </ItemGroup>
 </Project>
